@@ -1,6 +1,11 @@
-# alexa-mcp-server
+# NeuroCare
 
-MCP server for the [Amazon Developer Hackathon 2026](https://amazonappdev2026.devpost.com/) — **Alexa+ track**.
+A cognitive substrate for Alexa+: an MCP server that gives neurodivergent people persistent memory, a sense of time, a translator for ambiguous messages, task breakdown, and guardrails against rumination and hyperfocus.
+
+See the [spec](docs/spec.md) for design, tools, and AWS architecture, and
+[AWS setup](docs/aws-setup.md) for account, Bedrock, and agent-toolkit configuration.
+
+Built for the [Amazon Developer Hackathon 2026](https://amazonappdev2026.devpost.com/) — **Alexa+ track**.
 
 Implements a [Model Context Protocol](https://modelcontextprotocol.io) server over the
 [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http),

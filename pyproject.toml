@@ -1,7 +1,7 @@
 [project]
 name = "alexa-mcp-server"
 version = "0.1.0"
-description = "MCP server (Streamable HTTP) for the Amazon Developer Hackathon 2026 Alexa+ track"
+description = "NeuroCare — a cognitive substrate for Alexa+: an MCP server that gives neurodivergent people persistent memory, a sense of time, a translator for ambiguous messages, task breakdown, and guardrails against rumination and hyperfocus. Streamable HTTP, Amazon Developer Hackathon 2026 Alexa+ track."
 readme = "README.md"
 authors = [
     { name = "navinrc", email = "navinrc98@gmail.com" }

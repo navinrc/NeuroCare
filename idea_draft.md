@@ -1,6 +1,6 @@
-# Idea Draft — Cognitive Substrate for Neurodivergent People (Alexa+ Track)
+# Idea Draft — NeuroCare: a Cognitive Substrate for Neurodivergent People (Alexa+ Track)
 
-> Working name: **TBD**
+> Name: **NeuroCare**
 > Track: Alexa+ (self-hosted MCP server, Streamable HTTP, spec 2025-11-25+)
 > Mini-challenges: AWS Builder, Open Source
 
@@ -116,6 +116,8 @@ guardrail is best-effort. We'll document this in the friction log as product fee
 
 ## Architecture (initial)
 
+> Superseded in detail by the locked spec: [`docs/spec.md`](docs/spec.md).
+
 ```
 Alexa+ ──Streamable HTTP──▶ MCP server (Python, mcp v2 MCPServer)
                               ├── memory store   (SQLite local / DynamoDB on AWS)
@@ -161,7 +163,7 @@ Each step is demoable on its own. Three solid pillars beat four half-built ones.
 
 ## Open questions
 
-- Does Alexa+ honor MCP server `instructions`, and how strongly?
-- Does Alexa+ support MCP sampling or elicitation? This would affect translator and guardrail design.
-- Auth/account linking model for a per-user memory store.
-- Final name.
+- Does Alexa+ honor MCP server `instructions`, and how strongly? (Mitigations in [spec §12](docs/spec.md#12-open-risks); verify during testing.)
+- ~~Does Alexa+ support MCP sampling or elicitation?~~ Resolved: design assumes no; server calls Bedrock itself ([spec §2](docs/spec.md#2-alexa-constraints-and-design-responses)).
+- ~~Auth/account linking model for a per-user memory store.~~ Resolved for MVP: bearer token → single `user_id`; OAuth 2.1 later ([spec §3](docs/spec.md#3-locked-decisions)).
+- ~~Final name.~~ Resolved: **NeuroCare**.
