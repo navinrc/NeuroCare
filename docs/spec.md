@@ -534,7 +534,14 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 - `embedding`: float32 vector stored as binary (1024 dims for Titan v2 at default size).
 - TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days.
 - Access is always by `PK` (single user partition); similarity is computed in-process — per-user
-  corpora are small.
+  corpora are small. No vector database: at ~2,000 vectors × 1024 dims (~8 MB) a brute-force
+  cosine scan is a few milliseconds with numpy; the cost is the paginated DynamoDB read, paid
+  only when exact/alias/fuzzy recall all miss. Revisit only if a user exceeds ~5,000 vectors (§12).
+- **Embedding availability by phase:** phases 1–2 have no Bedrock client, so the embedding tier
+  is skipped (recall stops at fuzzy; rumination uses Jaccard only) and items are stored with
+  `embedding: null`. From phase 3, new items get embeddings on write and items with a null
+  embedding are backfilled lazily the first time the embedding tier scans them. Tests use
+  `FakeEmbedder` (deterministic vectors from a text hash, plus scripted "similar" pairs).
 
 ```mermaid
 erDiagram
@@ -689,7 +696,7 @@ Each phase is demoable on its own.
 |---|---|---|
 | 1 | Store interface + SQLite, auth, memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
-| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty |
+| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty |
 | 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits all four text tools (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
 | 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item); `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items; `GET /today` renders with token, 401 without |
 | 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
@@ -719,6 +726,8 @@ flowchart LR
   validation, `speak` presence, and crisis short-circuit.
 - Pillar tests run against both store backends (parameterized fixture): SQLite and moto DynamoDB.
 - `FakeLLM` returns scripted outputs or raises, for both refine and fallback paths.
+- `FakeEmbedder` returns deterministic vectors so the embedding tier and rumination cosine are
+  testable offline; a "no embedder" fixture covers the phase 1–2 path.
 - Time is injected (clock fixture), never read from the wall clock in tests.
 - Manual: MCP Inspector locally, then Alexa+ by voice, running the "One day" demo arc from the idea draft.
 
@@ -732,5 +741,6 @@ flowchart LR
 | Bedrock latency vs voice timeouts | 5 s timeout, deterministic fallback, Haiku-class model |
 | Exact v2 `MCPServer` option for stateless HTTP / JSON response mode | Verify against current SDK docs at start of phase 6 |
 | Lambda cold starts | Keep dependencies small; provisioned concurrency only if needed for demo |
+| Per-user corpus outgrows in-process similarity (> ~5,000 vectors) | First drop Titan v2 to 512 or 256 dims and store vectors under their own SK prefix; only then consider a managed vector store (S3 Vectors, OpenSearch Serverless) |
 | False positives in rumination/hyperfocus | Configurable thresholds, `lower_sensitivity` override, facts-not-instructions wording |
 | Scope creep into a second agent or broad inbox access | Alexa+ is the only agent; connectors only forward user-chosen messages to `/inbox` |
