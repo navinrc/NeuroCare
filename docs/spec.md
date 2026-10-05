@@ -24,7 +24,8 @@ self-reinforcing loops.
 | Ambiguity translator | Decode a message's literal meaning, likely intent, temperature, and reply needs |
 | Task breakdown | Split a vague goal into small, time-boxed steps; surface one step at a time |
 | Guardrail | Crisis path, rumination detection, hyperfocus check-ins, user overrides |
-| Daily plan | Brain-dump capture, top-3 priorities picked by the server, gentle end-of-day rollover, read-only `/today` card |
+| Daily plan | Brain-dump capture, top-3 priorities picked by the server, gentle end-of-day rollover, pinned Today message in Telegram |
+| Telegram companion (channel) | Forward messages for a triage card, tap buttons, pinned Today view, opt-in nudges the bot sends first |
 
 ### Out of scope (MVP)
 
@@ -36,7 +37,7 @@ self-reinforcing loops.
 - Third-party agent gateways (e.g. Hermes Agent) — optional future bridge into `POST /inbox`;
   never a second reasoning agent
 - Full planner features: monthly goals, habit streaks, meal logging, mood charts, an editable
-  planner UI (the `/today` card is read-only)
+  planner UI (Telegram shows the plan; it does not edit it)
 - Any medical, diagnostic, or treatment functionality
 
 ## 2. Alexa+ constraints and design responses
@@ -45,7 +46,7 @@ self-reinforcing loops.
 |---|---|
 | Alexa+ does not pass conversation history to tools | Server stores all history and state per user. Tools never require the model to carry IDs. |
 | MCP sampling assumed unavailable | Server calls Amazon Bedrock itself for language tasks. |
-| Server cannot initiate speech or push to the device | Checks run only when the user speaks. Results may include `suggest_reminder_minutes`; server instructions ask Alexa to set a native reminder. |
+| Server cannot initiate speech or push to the device | Checks run only when the user speaks. Results may include `suggest_reminder_minutes`; server instructions ask Alexa to set a native reminder. The only unprompted path is the optional Telegram bot (§5.7), opt-in and capped. |
 | Output is spoken, not read | Every tool result has a `speak` field: 1–2 short, literal sentences. Structured fields sit alongside for Alexa's reasoning. |
 | Server influences Alexa only via instructions, tool descriptions, and results; it never sees the final reply | Guardrails are best-effort. Observed behaviour is recorded in the friction log. |
 | Voice latency budget is tight | Non-LLM tools target < 1 s. Bedrock-backed tools time out at 5 s and fall back to the deterministic baseline. |
@@ -80,7 +81,7 @@ sequenceDiagram
     P-->>S: structured result + speak
     S-->>A: tool result
     A-->>U: speaks the "speak" text
-    Note over S,U: No push path — the server only answers when Alexa calls it.<br/>Nudges come back as suggest_reminder_minutes for Alexa to set a native reminder.
+    Note over S,U: Alexa path has no push — the server only answers when Alexa calls it.<br/>Nudges come back as suggest_reminder_minutes for Alexa to set a native reminder.<br/>The only unprompted path is the opt-in Telegram bot (§5.7).
 ```
 
 ## 3. Locked decisions
@@ -232,10 +233,17 @@ The `speak` quotes the user's own task wording and states facts, not instruction
 
 #### `decode(message=None, sender=None)`
 
+Decodes **and triages** a message: what it says, what it most likely means, how urgent it is,
+what it asks for, what it relates to, and a draft reply.
+
 | Param | Type | Notes |
 |---|---|---|
 | `message` | str? (≤ 4000) | The message the user received. If omitted, the newest undecoded inbox item is used (`NOT_FOUND` if none) |
 | `sender` | str? | Name; resolved against `person` memories. Inbox items supply their own sender |
+
+Every decode is stored on an `INBOX#` item (the existing one, or a new one for spoken/pasted
+text) with its result attached, TTL 7 days. This is what lets the Telegram card (§5.7), the
+pinned Today message, and `triage_inbox` show the same result whichever channel produced it.
 
 #### Input paths
 Reading a long message aloud is the main friction, so three paths feed the same tool:
@@ -245,6 +253,7 @@ Reading a long message aloud is the main friction, so three paths feed the same 
 | Speak it | 1–2 sentences | "What does Priya mean by 'let's circle back'?" → `decode(message=…)` |
 | Type or paste | Longer text | Alexa app / alexa.com text chat → same `decode(message=…)` call |
 | Forward it | Long emails, threads | iOS Share Sheet shortcut (or similar) posts to `POST /inbox`; user then says "decode the message I just sent" → `decode()` |
+| Telegram | Reading the full breakdown | Forward, share, or paste to the NeuroCare bot (§5.7); it replies with the triage card |
 
 `POST /inbox` is a plain HTTP route on the same server (not an MCP tool), same bearer token.
 Body: `{ text: str (≤ 4000), sender?: str, source?: str }`. Stores an `INBOX#` item (TTL 7 days).
@@ -253,12 +262,18 @@ Returns `{ id }`. The crisis precheck runs when the item is decoded, not on inge
 Returns
 ```
 {
+  id: str,                        # INBOX# item id
+  summary: str,                   # 1–2 literal sentences
   literal: str,
   likely_intents: [{ reading: str, confidence: float }],   # 1–3, confidences sum ≤ 1
   temperature: "neutral" | "warm" | "tense",
+  priority: "must" | "should" | "could" | "wait",          # same buckets as ITEM#
   reply_needed: bool,
   reply_by?: str,
-  suggested_reply?: str,          # in the user's register from profile
+  actions: [str],                 # concrete asks, verb-first ("send the Q3 deck by Friday")
+  related: [{ id, text }],        # open loops / commitments that match sender or topic
+  cues: [{ phrase, meaning }],    # phrases behind the reading ("per my last email" → "I already asked")
+  suggested_reply?: str,          # a draft in the user's register; never sent by the server
   suggest_reminder_minutes?: int, # set when reply_by is known
   needs_work: bool,               # message asks for a deliverable → Alexa may offer decompose
   sender_context_used: bool,
@@ -267,36 +282,53 @@ Returns
 }
 ```
 
-Pipeline:
+Pipeline (a fixed sequence of steps, not an open-ended agent loop):
 1. Crisis precheck.
 2. **Deterministic baseline:** phrase cues (hedges, deadline words, escalation phrases such as
    "per my last email", "just following up", question marks directed at the user) set a baseline
-   `temperature`, `reply_needed`, and one generic `likely_intent`.
-3. **Bedrock refine:** prompt includes the message, the baseline, the sender's stored profile
-   ("manager, blunt, not angry"), and the user's preferred register. Output is validated against a
-   JSON schema. On timeout/invalid output → return baseline with `source: "baseline"`.
+   `temperature`, `reply_needed`, `priority`, one generic `likely_intent`, and `cues`.
+3. **Context gather (no LLM):** sender profile (`PERSON#`), open loops and commitments matching
+   the sender or the message (tiered recall, §5.1) → `related`, and today's plan (`PLAN#<date>`).
+4. **Bedrock refine:** one call with the message, baseline, sender profile ("manager, blunt, not
+   angry"), related items, today's plan, and the user's register. The message is wrapped as
+   untrusted data (§6). Output is validated against a JSON schema. On timeout/invalid output →
+   return baseline with `source: "baseline"`.
+5. Store the result on the `INBOX#` item.
 
 ```mermaid
 flowchart TD
     IN([decode message, sender]) --> CR{Crisis precheck}
     CR -- hit --> CRISIS[[Crisis result only]]
-    CR -- clear --> BASE[Deterministic baseline<br/>phrase cues → temperature,<br/>reply_needed, generic intent]
-    BASE --> SEND[Look up sender in person memory]
-    SEND --> LLM[Bedrock Converse<br/>message + baseline + sender + register]
+    CR -- clear --> BASE[Deterministic baseline<br/>phrase cues → temperature, priority,<br/>reply_needed, generic intent, cues]
+    BASE --> CTX[Context gather, no LLM<br/>sender profile · related open loops<br/>· today's plan]
+    CTX --> LLM[Bedrock Converse<br/>message as untrusted data<br/>+ baseline + context + register]
     LLM --> OK{Valid JSON<br/>within 5 s?}
-    OK -- yes --> R1([Return refined result<br/>source: llm])
-    OK -- no --> R2([Return baseline<br/>source: baseline])
+    OK -- yes --> R1([Refined result<br/>source: llm])
+    OK -- no --> R2([Baseline result<br/>source: baseline])
+    R1 --> ST[(Store on INBOX# item)]
+    R2 --> ST
 ```
 
-`speak` gives the most likely reading first, then whether a reply is needed:
-"Most likely Priya just wants a status update — she's usually this short. Not urgent. A one-line reply today is fine."
+`speak` gives the most likely reading first, then urgency, then any related promise:
+"Most likely Priya just wants a status update — she's usually this short. Not urgent. A one-line reply today is fine. You told her the deck would be ready Monday."
 
 Low-friction rules:
-- `speak` carries only the verdict. `literal`, other intents, and `suggested_reply` are spoken
-  only when the user asks ("what should I say?").
+- `speak` carries only the verdict. `summary`, `actions`, other intents, `cues`, and
+  `suggested_reply` are spoken only when the user asks ("what should I say?", "what does she
+  want?"), and are always on the Telegram card when the chat is linked.
 - At most one follow-up offer per result: a reminder (`suggest_reminder_minutes`) **or**
   "want me to break that into steps?" (`needs_work`), not both.
 - Unknown sender: still answer; offer once to remember who they are.
+
+#### `triage_inbox(limit=3)`
+"What needs me?" / "Anything urgent?" Decodes pending inbox items (at most 3 per call, to stay
+inside the latency budget; the rest are reported as `pending`), then ranks all decoded,
+unresolved items by `priority` → `reply_by` → age.
+Returns `{ items: [{ id, sender, summary, priority, reply_by? }], pending, speak }`.
+`speak` reads only the top `limit`: "Two things need you. Priya wants a status update today.
+Sam's invoice question can wait until Friday."
+An item is resolved when its reply commitment is closed, when its "add to today" item is done,
+or when the user says "that's handled" (`close_loop`).
 
 ### 5.4 Task breakdown
 
@@ -438,11 +470,127 @@ Alexa calls `plan_today` again; the plan is never edited item by item by voice.
 Returns `{ done: [...], rolled_over: [...], speak }`.
 `speak` is factual and neutral, with no streaks or scores: "Slides done. Priya moved to tomorrow."
 
-#### `GET /today`
-Read-only HTML card on the same server, bearer token as `?token=` or header, for a phone
-home-screen glance. Shows today's focus (first priority), the priority list with done marks, the
-active task's current step, and the count of unsorted brain-dump items. No editing, no history,
-no charts. Plain server-rendered HTML, works without JavaScript.
+The glanceable view of the plan is the pinned Today message in Telegram (§5.7).
+
+### 5.7 Telegram companion
+
+A channel, not a new pillar. Alexa+ is for hands-free speech; the Telegram bot is for reading,
+forwarding, and tapping. Both call the same pillar functions, so state is shared: a message
+forwarded on Telegram shows up in "Alexa, what needs me?", and a plan made by voice updates the
+pinned Today message. It uses the Telegram Bot API directly, with no agent framework. Optional:
+everything still works with Alexa alone.
+
+#### `telegram_link_code()` (MCP tool)
+"Alexa, link Telegram." Returns a 6-digit code valid for 10 minutes, and `speak` reads it out.
+The user sends `/start <code>` to the bot; the server maps the chat to the user (`TG#<chat_id>`).
+Unlinked chats get only "Link first: ask Alexa to link Telegram." The first linked message
+states once that bot chats are not end-to-end encrypted (§6). `delete_all` unlinks the chat.
+
+#### Inbound
+Telegram webhook → `POST /telegram` on the Function URL. The request must carry the
+`X-Telegram-Bot-Api-Secret-Token` header matching `TELEGRAM_WEBHOOK_SECRET`, otherwise 401.
+Stateless, so it fits Lambda. Local dev uses long polling (`getUpdates`) instead of the webhook.
+
+| Message | Action |
+|---|---|
+| Forwarded or pasted text | `decode` → triage card |
+| `/dump <text>` or "dump: …" | `brain_dump` |
+| `/plan [energy]` | `plan_today` |
+| `/wrap` | `wrap_up` |
+| `/needs` | `triage_inbox` |
+| Anything else | `decode` (default), with a "Not a message? Save as dump" button |
+
+The crisis precheck runs on all inbound text through these same tools. A crisis reply is plain
+text with resources, with no buttons.
+
+#### Triage card
+```
+Most likely: she wants a status update. Not angry.
+Also possible: she's worried about the date.
+Tone: direct · Reply: yes, today
+Priya: manager, usually short
+Related: you promised her the deck Monday
+Asks: send a status update
+Why: "per my last email" usually means "I already asked"
+
+Suggested reply:
+  Hi Priya, it's on track for Friday. I'll send it Thursday afternoon.
+
+[Remind me to reply] [Add to today]
+[✓ Right] [✗ Not quite]
+```
+- Confidence is in words ("most likely", "also possible"), never numbers. Tone labels are
+  calm: `tense` shows as "direct".
+- The suggested reply is in a code block for one-tap copy. The server never sends it.
+- Buttons: **Remind me to reply** → `remember(kind=commitment, due_at=reply_by)`;
+  **Add to today** → `brain_dump` of the first action; **✗ Not quite** asks for one line and saves
+  it as a note on the sender's `PERSON#` record, which the next decode uses.
+
+#### Pinned Today message
+The bot keeps one pinned message and edits it in place whenever the plan changes: focus (first
+priority), priorities with done marks, the active task's current step, the unsorted brain-dump
+count, and a "Last decoded" line (sender, summary, priority). Read-only: plans change through
+`/plan`, `/wrap`, or voice, never by editing the message.
+
+#### Messages the bot sends first
+The one place NeuroCare can reach the user unprompted (Alexa cannot, §2). Each type is opt-in
+and off by default:
+
+| Type | When |
+|---|---|
+| `morning` | At `telegram.morning_at`: "Plan your day?" with a [Plan] button |
+| `reply_nudge` | 30 minutes before a decoded message's `reply_by` |
+| `wrap_up` | At `time.end_of_day`: "Wrap up?" with a [Wrap up] button |
+
+Hard cap of `telegram.max_push_per_day` (default 3) and no messages during
+`telegram.quiet_hours`. An EventBridge Scheduler rule invokes the same Lambda every 15 minutes;
+it sends only what is due and logs each send (`PUSH#`) for the cap.
+
+#### Flows
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant T as Telegram
+    participant S as Lambda (POST /telegram)
+    participant P as Pillar logic
+    participant B as Amazon Bedrock
+    participant D as DynamoDB
+    participant E as EventBridge Scheduler
+
+    rect rgb(236, 239, 244)
+    Note over U,D: Forward a message
+    U->>T: forwards Priya's email text
+    T->>S: webhook update + secret header
+    S->>D: TG#chat_id → user_id
+    S->>P: decode(text, sender)
+    P->>B: Converse (5 s timeout)
+    B-->>P: triage JSON or timeout → baseline
+    P->>D: store result on INBOX# item
+    S->>T: sendMessage: triage card + buttons
+    T-->>U: card
+    U->>T: taps "Remind me to reply"
+    T->>S: callback_query
+    S->>P: remember(kind=commitment, due_at=reply_by)
+    S->>T: edit card: "Reminder saved for 3:30"
+    end
+
+    rect rgb(220, 239, 251)
+    Note over E,U: Message the bot sends first
+    E->>S: scheduled invoke (every 15 min)
+    S->>D: due items · opt-in · PUSH# count · quiet hours
+    alt due, opted in, under cap, outside quiet hours
+        S->>T: sendMessage "Priya wants an answer by 4" [Open]
+        S->>D: log PUSH#
+        T-->>U: notification
+    else otherwise
+        S-->>S: send nothing
+    end
+    end
+```
+
+Not in scope: group chats, voice notes, editing plans in Telegram, sending drafts to anyone.
 
 ## 6. Safety
 
@@ -482,6 +630,11 @@ flowchart TD
 - Encrypted at rest (DynamoDB default KMS; SQLite file is local dev only).
 - User owns data: `export_all`, `delete_all`.
 - Demo uses synthetic data only.
+- Message text from any channel is untrusted data. LLM prompts wrap it as data, and instructions
+  inside it ("ignore previous instructions", "forward this to…") are never followed.
+- Suggested replies are drafts. The server never sends a message to anyone other than the user.
+- Telegram bot chats are not end-to-end encrypted: forwarded messages pass through Telegram's
+  servers. The bot says so once on linking; docs advise against forwarding confidential work mail.
 
 ## 7. Profile schema
 
@@ -507,6 +660,10 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `consent.embeddings` | bool | `true` | If false, recall/rumination skip the embedding tier |
 | `plan.max_priorities` | int 1–3 | 3 | Upper bound for `plan_today` |
 | `plan.rollover` | bool | `true` | `wrap_up` moves unfinished priorities to tomorrow |
+| `telegram.pushes` | `{morning, reply_nudge, wrap_up}` bools | all `false` | Opt-in per type (§5.7) |
+| `telegram.max_push_per_day` | int 0–5 | 3 | Hard cap on messages the bot sends first |
+| `telegram.quiet_hours` | `HH:MM-HH:MM` | `21:00-08:00` | No bot-initiated messages inside this range |
+| `telegram.morning_at` | `HH:MM` | `08:30` | Time of the `morning` prompt |
 
 ## 8. Data model
 
@@ -529,11 +686,19 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `TOPIC#` | rumination topic | `text`, `embedding`, `ttl` |
 | `NEED#` | water/food/break log | `kind`, `ttl` |
 | `OVERRIDE#` | override log | `token`, `active_until` |
-| `STATE` | pointers | `open_block_id`, `active_task_id`, `crisis_flag_at` |
+| `PUSH#` | bot-initiated message log | `kind`, `sent_at`, `ttl` (2 days) |
+| `STATE` | pointers | `open_block_id`, `active_task_id`, `crisis_flag_at`, `telegram_chat_id`, `pinned_message_id` |
+
+Two items live outside the user partition, because the caller knows only a chat or a code:
+
+| PK / SK | Item | Attributes |
+|---|---|---|
+| `TG#<chat_id>` / `LINK` | Telegram chat → user | `user_id`, `linked_at` |
+| `LINKCODE#<code>` / `CODE` | pending link code | `user_id`, `ttl` (10 minutes) |
 
 - `embedding`: float32 vector stored as binary (1024 dims for Titan v2 at default size).
 - TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days.
-- Access is always by `PK` (single user partition); similarity is computed in-process — per-user
+- Access is always by `PK` (single user partition, or the two lookup items above); similarity is computed in-process — per-user
   corpora are small. No vector database: at ~2,000 vectors × 1024 dims (~8 MB) a brute-force
   cosine scan is a few milliseconds with numpy; the cost is the paginated DynamoDB read, paid
   only when exact/alias/fuzzy recall all miss. Revisit only if a user exceeds ~5,000 vectors (§12).
@@ -558,13 +723,15 @@ erDiagram
     USER ||--o{ ITEM : "SK=ITEM#ulid"
     USER ||--o{ PLAN : "SK=PLAN#date"
     PLAN }o--o{ ITEM : priorities
+    USER ||--o{ PUSH : "SK=PUSH#ulid"
+    TGLINK |o--|| USER : user_id
     STATE |o--o| BLOCK : open_block_id
     STATE |o--o| TASK : active_task_id
     MEM }o--o| PERSON : subject
 
     USER { string user_id PK "partition key USER#user_id" }
     PROFILE { map doc }
-    STATE { string open_block_id string active_task_id datetime crisis_flag_at }
+    STATE { string open_block_id string active_task_id datetime crisis_flag_at string telegram_chat_id string pinned_message_id }
     MEM { string kind string text string subject datetime due_at string status binary embedding }
     PERSON { string role string notes list aliases }
     BLOCK { string task datetime started_at datetime ended_at string summary }
@@ -575,6 +742,8 @@ erDiagram
     OVERRIDE { string token datetime active_until }
     ITEM { string text string tag string bucket datetime due_at string status }
     PLAN { list priorities int energy datetime wrapped_at }
+    PUSH { string kind datetime sent_at number ttl }
+    TGLINK { string chat_id PK "PK=TG#chat_id" string user_id datetime linked_at }
 ```
 
 ### SQLite (local)
@@ -591,10 +760,13 @@ Same flow as Mermaid (renders even without the image), with the server's interna
 ```mermaid
 flowchart LR
     U((User)) -->|voice| A[Alexa+]
+    U -->|text · buttons| TG[Telegram]
+    TG -->|webhook POST /telegram<br/>secret header| URL
     A -->|MCP · Streamable HTTP<br/>Bearer token| URL[Lambda Function URL]
 
     subgraph AWS["AWS account · us-east-1"]
         URL --> TOOLS
+        SCH[EventBridge Scheduler<br/>every 15 min] -->|invoke| SRV
 
         subgraph SRV["MCP server · Lambda (Python, stateless)"]
             TOOLS[Tool layer<br/>server.py] --> AUTH[auth<br/>token → user_id]
@@ -610,6 +782,7 @@ flowchart LR
         LLMC -->|ApplyGuardrail| GR[Bedrock<br/>Guardrails]
         STC --> DDB[(DynamoDB<br/>KMS-encrypted)]
         SRV -.->|metadata only| CW[CloudWatch Logs]
+        SRV -->|Bot API sendMessage| TG
     end
 
     subgraph LOCAL["Local dev"]
@@ -622,11 +795,11 @@ flowchart LR
     classDef data fill:#3B48CC,stroke:#262F85,color:#FFFFFF
     classDef code fill:#ECEFF4,stroke:#7D8998,color:#1B1F24
     classDef ext fill:#DCEFFB,stroke:#147EBA,color:#0B3D5C
-    class URL,CW aws
+    class URL,CW,SCH aws
     class HAIKU,TITAN,GR bedrock
     class DDB,SQL data
     class TOOLS,AUTH,SAFE,PIL,LLMC,STC,LSRV code
-    class A,INS ext
+    class A,INS,TG ext
 ```
 
 Planned module layout (not yet created):
@@ -639,7 +812,9 @@ src/alexa_mcp_server/
   store/             base.py (interface), sqlite.py, dynamo.py
   llm/               bedrock.py, fake.py (tests)
   pillars/           memory.py, time.py, translator.py, tasks.py, guardrail.py, plan.py
-  web/today.py       read-only GET /today card (plus POST /inbox route)
+  channels/http.py   POST /inbox route
+  channels/telegram.py  webhook, link flow, triage card, buttons, pinned Today message
+  channels/schedule.py  scheduled bot messages (cap, quiet hours)
   safety/crisis.py   phrase list + ApplyGuardrail
   lambda_handler.py  ASGI → Lambda adapter
 profile_seed.yaml
@@ -658,6 +833,7 @@ uv run --no-project --with diagrams python docs/diagrams/aws_architecture.py
 
 Environment variables: `STORE`, `TABLE_NAME`, `SQLITE_PATH`, `AUTH_TOKEN`, `DEMO_USER_ID`,
 `BEDROCK_MODEL_ID`, `BEDROCK_EMBED_MODEL_ID`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`,
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (both from SSM / Secrets Manager on AWS),
 `AWS_REGION`, `HOST`, `PORT`.
 
 ## 10. Server instructions (draft)
@@ -685,6 +861,8 @@ You are connected to a personal cognitive support server for this user.
 - When the user asks to plan their day, call plan_today; pass energy if they mention it.
   If they swap a priority, call plan_today again rather than editing items one by one.
 - When the user says "wrap up" or "done for today", call wrap_up.
+- When the user asks "what needs me?" or "anything urgent?", call triage_inbox.
+- When the user asks to link Telegram, call telegram_link_code and read the code slowly.
 - The user is in charge. If they say "I know, keep going", call override with keep_going_once.
 ```
 
@@ -696,10 +874,11 @@ Each phase is demoable on its own.
 |---|---|---|
 | 1 | Store interface + SQLite, auth, memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
-| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty |
+| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty; triage fields present (`related` resolved from seeded commitments, `cues` from baseline); a message containing injected instructions yields a normal result with no side effects; `triage_inbox` orders by priority → reply_by → age and decodes at most 3 per call |
 | 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits all four text tools (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
-| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item); `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items; `GET /today` renders with token, 401 without |
+| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item); `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
 | 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
+| 6b | Telegram companion | Link code flow (expiry, single use); webhook rejects a missing/wrong secret header; unlinked chat rejected; forwarded text → triage card with buttons; buttons call `remember` / `brain_dump` / feedback; pinned Today message edited on plan change; push cap and quiet hours honored (clock fixture); local long-polling dev mode works |
 | 7 | Stretch | `reality_check(claim)`; Cognito OAuth 2.1 |
 
 ```mermaid
@@ -711,13 +890,15 @@ flowchart LR
     P3 --> P5[5 · Task breakdown<br/>+ daily plan]
     P4 --> P6[6 · DynamoDB + CDK<br/>+ Lambda deploy]
     P5 --> P6
-    P6 --> P7[7 · Stretch<br/>reality_check · OAuth]
+    P6 --> P6B[6b · Telegram companion]
+    P6B --> P7[7 · Stretch<br/>reality_check · OAuth]
 
     classDef mvp fill:#DCEFFB,stroke:#147EBA,color:#0B3D5C
     classDef aws fill:#FF9900,stroke:#B36B00,color:#000000
     classDef stretch fill:#ECEFF4,stroke:#7D8998,color:#1B1F24,stroke-dasharray:4 3
     class P1,P2,P3,P4,P5 mvp
     class P6 aws
+    class P6B mvp
     class P7 stretch
 ```
 
@@ -744,3 +925,6 @@ flowchart LR
 | Per-user corpus outgrows in-process similarity (> ~5,000 vectors) | First drop Titan v2 to 512 or 256 dims and store vectors under their own SK prefix; only then consider a managed vector store (S3 Vectors, OpenSearch Serverless) |
 | False positives in rumination/hyperfocus | Configurable thresholds, `lower_sensitivity` override, facts-not-instructions wording |
 | Scope creep into a second agent or broad inbox access | Alexa+ is the only agent; connectors only forward user-chosen messages to `/inbox` |
+| Notification fatigue from bot-initiated messages | Off by default, opt-in per type, daily cap, quiet hours |
+| Telegram not allowed by employer or not installed | Channel is optional; Alexa alone covers every feature except unprompted messages |
+| Spoofed webhook calls | Secret header check; unlinked chats rejected |

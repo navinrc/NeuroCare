@@ -13,14 +13,16 @@ from pathlib import Path
 from diagrams import Cluster, Diagram, Edge
 from diagrams.aws.compute import Lambda
 from diagrams.aws.database import DynamodbTable
+from diagrams.aws.integration import EventbridgeScheduler
 from diagrams.aws.general import User
 from diagrams.aws.iot import IotAlexaEcho, IotAlexaVoiceService
 from diagrams.aws.management import Cloudformation, CloudwatchLogs
 from diagrams.aws.ml import Bedrock
-from diagrams.aws.security import KMS, IAMRole
+from diagrams.aws.security import KMS, IAMRole, SecretsManager
 from diagrams.generic.database import SQL
 from diagrams.onprem.client import Client
 from diagrams.programming.language import Python
+from diagrams.saas.chat import Telegram
 
 OUT = Path(__file__).with_suffix("")
 
@@ -39,6 +41,7 @@ AWS_BLUE = "#147EBA"
 AWS_ORANGE = "#ED7100"
 BEDROCK_TEAL = "#01A88D"
 GREY = "#7D8998"
+TELEGRAM_BLUE = "#229ED9"
 
 with Diagram(
     "NeuroCare — AWS Architecture",
@@ -50,20 +53,24 @@ with Diagram(
     node_attr=NODE,
     edge_attr=EDGE,
 ):
-    user = User("User\n(voice)")
+    user = User("User\n(voice · text)")
 
     with Cluster("Amazon Alexa"):
         echo = IotAlexaEcho("Echo device")
         alexa = IotAlexaVoiceService("Alexa+\n(LLM orchestration)")
 
+    telegram = Telegram("Telegram bot\n(optional companion)")
+
     with Cluster("AWS account · us-east-1", graph_attr={"bgcolor": "#F7F9FC"}):
         with Cluster("Compute", graph_attr={"bgcolor": "#FFF4E8"}):
             mcp = Lambda("MCP server\n(Python, stateless\nStreamable HTTP)\n+ Function URL")
             role = IAMRole("Execution role\n(least privilege)")
+            scheduler = EventbridgeScheduler("EventBridge Scheduler\n(every 15 min)")
 
         with Cluster("Data", graph_attr={"bgcolor": "#EEF3FB"}):
             table = DynamodbTable("cognitive-substrate\n(PK=USER#id)")
             kms = KMS("KMS\n(encryption at rest)")
+            secrets = SecretsManager("Secrets Manager\n(bot token ·\nwebhook secret)")
 
         with Cluster("Amazon Bedrock", graph_attr={"bgcolor": "#E9F7F4"}):
             llm = Bedrock("Claude Haiku 4.5\n(Converse)")
@@ -81,6 +88,11 @@ with Diagram(
 
     user >> Edge(label="speaks") >> echo >> alexa
     alexa >> Edge(label="MCP · Streamable HTTP\nBearer token", color=AWS_ORANGE, style="bold") >> mcp
+    user >> Edge(label="forwards · taps", color=TELEGRAM_BLUE) >> telegram
+    telegram >> Edge(label="webhook POST /telegram\nsecret header", color=TELEGRAM_BLUE) >> mcp
+    mcp >> Edge(label="Bot API sendMessage", color=TELEGRAM_BLUE, style="dashed") >> telegram
+    scheduler >> Edge(label="invoke", color=AWS_ORANGE) >> mcp
+    secrets - Edge(style="dotted", color=GREY) - mcp
     cfn >> Edge(label="deploys", style="dashed", color=GREY) >> mcp
     mcp >> Edge(style="dotted", color=GREY) >> logs
     mcp >> Edge(label="crisis check", color=BEDROCK_TEAL) >> guard
