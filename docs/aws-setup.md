@@ -158,6 +158,19 @@ Lambda Function URL exists.
 
 Privacy reminder: bot chats are not end-to-end encrypted. Demo with synthetic messages only.
 
+### Optional: email forwarding address (spec §5.8)
+
+Needs a domain you control (a subdomain is enough).
+
+1. **SES → Identities:** verify the domain (e.g. `in.neurocare.example`) in `us-east-1`.
+2. **DNS:** add an MX record `in.neurocare.example → inbound-smtp.us-east-1.amazonaws.com` (priority 10).
+3. **SES → Email receiving:** create a rule set (CDK can do this) with one rule for
+   `inbox@in.neurocare.example`: action **S3** (the KMS-encrypted bucket with a 1-day lifecycle),
+   with S3 event notification → the Lambda. Make the rule set **active**.
+4. Set `email.allowed_senders` in the profile seed to your own address(es).
+5. Test: forward a synthetic email from an allowed address and check it shows up as a
+   Telegram card or under "Alexa, what needs me?". Mail from other addresses must not appear.
+
 ## 7. Checklist
 
 - [ ] Account created, root MFA on
@@ -170,6 +183,7 @@ Privacy reminder: bot chats are not end-to-end encrypted. Demo with synthetic me
 - [ ] `aws sts get-caller-identity` works for both profiles
 - [ ] (Phase 6b) Telegram bot created; token + webhook secret in Secrets Manager
 - [ ] (Phase 6b) Webhook registered with `secret_token`; Scheduler rule present
+- [ ] (Optional) SES domain verified, MX record set, receipt rule set active, allowlist seeded
 
 ## References
 

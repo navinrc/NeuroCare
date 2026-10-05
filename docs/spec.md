@@ -247,7 +247,7 @@ text) with its result attached, TTL 7 days. This is what lets the Telegram card 
 pinned Today message, and `triage_inbox` show the same result whichever channel produced it.
 
 #### Input paths
-Reading a long message aloud is the main friction, so four paths feed the same tool:
+Reading a long message aloud is the main friction, so these paths feed the same tool:
 
 | Path | Best for | How |
 |---|---|---|
@@ -255,6 +255,7 @@ Reading a long message aloud is the main friction, so four paths feed the same t
 | Type or paste | Longer text | Alexa app / alexa.com text chat → same `decode(message=…)` call |
 | Forward it | Long emails, threads | iOS Share Sheet shortcut (or similar) posts to `POST /inbox`; user then says "decode the message I just sent" → `decode()` |
 | Telegram | Reading the full breakdown | Forward, share, or paste to the NeuroCare bot (§5.7); it replies with the triage card |
+| Email forward | Emails, one tap from any mail app | Forward to the NeuroCare address (§5.8, optional, phase 6b); sender kept automatically |
 
 `POST /inbox` is a plain HTTP route on the same server (not an MCP tool), same bearer token.
 Body: `{ text: str (≤ 4000), sender?: str, source?: str }`. Stores an `INBOX#` item (TTL 7 days).
@@ -278,6 +279,7 @@ Returns
   suggest_reminder_minutes?: int, # set when reply_by is known
   needs_work: bool,               # message asks for a deliverable → Alexa may offer decompose
   sender_context_used: bool,
+  sender_source: "param" | "channel" | "header" | "signature" | "asked" | null,
   source: "llm" | "baseline",
   speak
 }
@@ -320,6 +322,23 @@ Low-friction rules:
 - At most one follow-up offer per result: a reminder (`suggest_reminder_minutes`) **or**
   "want me to break that into steps?" (`needs_work`), not both.
 - Unknown sender: still answer; offer once to remember who they are.
+
+#### Sender resolution
+Sender context is what makes decoding better than a bare LLM, and pasted text usually loses it.
+The server resolves the sender in this order and stops at the first hit:
+
+| # | Source | Example |
+|---|---|---|
+| 1 | Explicit `sender` param | "What does Priya mean by…" |
+| 2 | Channel metadata | Telegram `forward_origin` name; email forward's original `From:` (§5.8) |
+| 3 | Header lines in the pasted text | `From: Priya Shah <priya@…>` copied along with the body |
+| 4 | Greeting or signature matched against `PERSON#` names and aliases | "Thanks, Priya" / "– P." |
+| 5 | Ask once | Telegram: button row of the 3 most recently mentioned people + [Someone else] + [Skip]. Voice: decode proceeds without sender context; `speak` ends with "Who's it from?" |
+
+Tiers 3–4 are deterministic (regex + tiered name matching, §5.1), so there is no extra LLM call.
+A tier-4 match is used only if it is unambiguous. When the user picks a sender after the fact,
+the sender is stored on the `INBOX#` item and `decode` re-runs with that context. The result
+carries `sender_source: "param" | "channel" | "header" | "signature" | "asked" | null`.
 
 #### `triage_inbox(limit=3)`
 "What needs me?" / "Anything urgent?" Decodes pending inbox items (at most 3 per call, to stay
@@ -593,6 +612,41 @@ sequenceDiagram
 
 Not in scope: group chats, voice notes, editing plans in Telegram, sending drafts to anyone.
 
+### 5.8 Email forwarding address (optional, phase 6b)
+
+One-tap Forward from any mail app, with the original sender kept. The user still chooses each
+email, so this is not an inbox connector: nothing is read that the user did not forward.
+
+- **Address:** `inbox@<INBOUND_EMAIL_DOMAIN>` (a subdomain such as `in.neurocare.example`, with
+  an MX record pointing to SES inbound in `us-east-1`). Single demo user for the MVP; per-user
+  `inbox+<code>@…` addresses come with OAuth.
+- **Acceptance:** SES receipt rule accepts mail only when the envelope `From` is in
+  `email.allowed_senders` **and** SES SPF and DKIM verdicts are `PASS`. Everything else is
+  dropped without a bounce.
+- **Pipeline:** SES → S3 (raw MIME, KMS-encrypted, lifecycle delete after 1 day) → Lambda
+  (`channels/email.py`) → parse → `INBOX#` item with `source: "email"` → raw object deleted.
+- **Parsing:** take the forwarded block's original `From:`, `Subject:`, and `Date:`
+  (Gmail/Outlook/Apple Mail "Forwarded message" formats); strip quoted history and signatures;
+  keep plain text only, max 4000 characters; ignore attachments.
+- **After ingest:** if a Telegram chat is linked, the bot sends the triage card (a reply to the
+  user's action, so it does not count toward `telegram.max_push_per_day`). Otherwise it waits for
+  "Alexa, what needs me?" or "decode the email I forwarded".
+- **Never** replies to, or sends mail to, anyone. No outbound email at all.
+
+```mermaid
+flowchart LR
+    M([User taps Forward<br/>in any mail app]) --> SES[SES inbound<br/>in.domain MX]
+    SES --> V{From in allowed_senders<br/>and SPF + DKIM pass?}
+    V -- no --> DROP[[Drop silently]]
+    V -- yes --> S3[(S3 raw MIME<br/>KMS · 1-day lifecycle)]
+    S3 --> L[Lambda channels/email.py<br/>parse original From,<br/>strip quotes, ≤ 4000 chars]
+    L --> IN[(INBOX# item<br/>source: email)]
+    L -.-> DEL[Delete raw object]
+    IN --> TGQ{Telegram linked?}
+    TGQ -- yes --> CARD([decode → triage card in Telegram])
+    TGQ -- no --> WAIT([Wait for 'Alexa, what needs me?'])
+```
+
 ## 6. Safety
 
 ### Crisis path
@@ -665,6 +719,7 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `telegram.max_push_per_day` | int 0–5 | 3 | Hard cap on messages the bot sends first |
 | `telegram.quiet_hours` | `HH:MM-HH:MM` | `21:00-08:00` | No bot-initiated messages inside this range |
 | `telegram.morning_at` | `HH:MM` | `08:30` | Time of the `morning` prompt |
+| `email.allowed_senders` | str[] | [] | Addresses allowed to forward to the inbound address (§5.8); empty disables it |
 
 ## 8. Data model
 
@@ -763,12 +818,15 @@ Same flow as Mermaid (renders even without the image), with the server's interna
 flowchart LR
     U((User)) -->|voice| A[Alexa+]
     U -->|text · buttons| TG[Telegram]
+    U -->|forward email| SESN
     TG -->|webhook POST /telegram<br/>secret header| URL
     A -->|MCP · Streamable HTTP<br/>Bearer token| URL[Lambda Function URL]
 
     subgraph AWS["AWS account · us-east-1"]
         URL --> TOOLS
         SCH[EventBridge Scheduler<br/>every 15 min] -->|invoke| SRV
+        SESN[SES inbound<br/>optional] -->|raw MIME| S3B[(S3<br/>1-day lifecycle)]
+        S3B -->|object created| SRV
 
         subgraph SRV["MCP server · Lambda (Python, stateless)"]
             TOOLS[Tool layer<br/>server.py] --> AUTH[auth<br/>token → user_id]
@@ -797,7 +855,8 @@ flowchart LR
     classDef data fill:#3B48CC,stroke:#262F85,color:#FFFFFF
     classDef code fill:#ECEFF4,stroke:#7D8998,color:#1B1F24
     classDef ext fill:#DCEFFB,stroke:#147EBA,color:#0B3D5C
-    class URL,CW,SCH aws
+    class URL,CW,SCH,SESN aws
+    class S3B data
     class HAIKU,TITAN,GR bedrock
     class DDB,SQL data
     class TOOLS,AUTH,SAFE,PIL,LLMC,STC,LSRV code
@@ -817,11 +876,13 @@ src/alexa_mcp_server/
   channels/http.py   POST /inbox route
   channels/telegram.py  webhook, link flow, triage card, buttons, pinned Today message
   channels/schedule.py  scheduled bot messages (cap, quiet hours)
+  channels/email.py  SES inbound: parse forwarded email → INBOX# (optional)
   safety/crisis.py   phrase list + ApplyGuardrail
   lambda_handler.py  ASGI → Lambda adapter
 profile_seed.yaml
 infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail), Guardrail,
-                     EventBridge Scheduler rule, Secrets Manager secrets (Telegram bot token, webhook secret)
+                     EventBridge Scheduler rule, Secrets Manager secrets (Telegram bot token, webhook secret),
+                     optional SES receipt rule + S3 bucket for email forwarding
 ```
 
 Pillar modules are plain functions taking `(store, llm, user_id, ...)` so they are testable
@@ -837,6 +898,7 @@ uv run --no-project --with diagrams python docs/diagrams/aws_architecture.py
 Environment variables: `STORE`, `TABLE_NAME`, `SQLITE_PATH`, `AUTH_TOKEN`, `DEMO_USER_ID`,
 `BEDROCK_MODEL_ID`, `BEDROCK_EMBED_MODEL_ID`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (both from SSM / Secrets Manager on AWS),
+`INBOUND_EMAIL_DOMAIN`, `INBOUND_EMAIL_BUCKET` (optional),
 `AWS_REGION`, `HOST`, `PORT`.
 
 ## 10. Server instructions (draft)
@@ -877,11 +939,11 @@ Each phase is demoable on its own.
 |---|---|---|
 | 1 | Store interface + SQLite, auth, memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
-| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty; triage fields present (`related` resolved from seeded commitments, `cues` from baseline); a message containing injected instructions yields a normal result with no side effects; `triage_inbox` orders by priority → reply_by → age and decodes at most 3 per call |
+| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty; triage fields present (`related` resolved from seeded commitments, `cues` from baseline); a message containing injected instructions yields a normal result with no side effects; sender resolution tiers 1–4 tested (header line, unambiguous signature, ambiguous signature → none); `triage_inbox` orders by priority → reply_by → age and decodes at most 3 per call |
 | 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits `remember`, `decode`, `log_topic`, and `decompose` (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
 | 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item) and is short-circuited by the crisis precheck; `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
 | 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
-| 6b | Telegram companion | Link code flow (expiry, single use); webhook rejects a missing/wrong secret header; unlinked chat rejected; forwarded text → triage card with buttons; buttons call `remember` / `brain_dump` / feedback; pinned Today message edited on plan change; push cap and quiet hours honored (clock fixture); local long-polling dev mode works |
+| 6b | Telegram companion | Link code flow (expiry, single use); webhook rejects a missing/wrong secret header; unlinked chat rejected; forwarded text → triage card with buttons; buttons call `remember` / `brain_dump` / feedback; pinned Today message edited on plan change; push cap and quiet hours honored (clock fixture); local long-polling dev mode works. Optional email forwarding: Gmail/Outlook/Apple Mail forward fixtures parse the original sender; non-allowlisted or SPF/DKIM-failing mail dropped; raw object deleted after parse; card sent to linked Telegram chat |
 | 7 | Stretch | `reality_check(claim)`; Cognito OAuth 2.1 |
 
 ```mermaid
@@ -931,3 +993,5 @@ flowchart LR
 | Notification fatigue from bot-initiated messages | Off by default, opt-in per type, daily cap, quiet hours |
 | Telegram not allowed by employer or not installed | Channel is optional; Alexa alone covers every feature except unprompted messages |
 | Spoofed webhook calls | Secret header check; unlinked chats rejected |
+| Spoofed forwarded email | Sender allowlist plus SES SPF/DKIM verdicts; no outbound mail, so a spoof can at most add an inbox item |
+| Forwarded-email formats vary by client | Fixtures for Gmail, Outlook, Apple Mail; fall back to sender resolution tiers 3–5 |
