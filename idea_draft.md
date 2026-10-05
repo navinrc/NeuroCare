@@ -46,6 +46,9 @@ the language and reasoning; the substrate supplies what it lacks.
 
 ## The four pillars
 
+> The spec has since grown to six pillars (adding task breakdown and a daily plan) plus an
+> optional Telegram companion. See [spec §1](docs/spec.md#1-purpose-and-scope).
+
 ### 1. Memory
 
 Persistent, user-owned context across conversations.
@@ -69,7 +72,8 @@ Makes elapsed and remaining time tangible.
 | `check_in()` | Drift detection: "You started the email 70 min ago" |
 
 **Constraint:** the MCP server cannot push to the device on its own. Time-based nudges are
-delegated by returning guidance for Alexa to set native reminders.
+delegated by returning guidance for Alexa to set native reminders. (Later addition: an opt-in
+Telegram bot is the one path that can message the user first; see [spec §5.7](docs/spec.md#57-telegram-companion).)
 
 ### 3. Ambiguity translator
 
@@ -128,6 +132,8 @@ Alexa+ ──Streamable HTTP──▶ MCP server (Python, mcp v2 MCPServer)
 
 ## Build order (MVP first)
 
+> Superseded by the phase plan in [spec §11](docs/spec.md#11-build-phases-and-acceptance-criteria).
+
 1. **Memory + profile**: foundation for everything else
 2. **Sense of time**
 3. **Ambiguity translator**
@@ -138,9 +144,13 @@ Each step is demoable on its own. Three solid pillars beat four half-built ones.
 ## Demo arc (≤ 3 min): "One day"
 
 1. **Morning:** "What was I doing yesterday?" Memory restores context and open loops.
-2. **Work:** A vague message from a manager is decoded, with a suggested reply.
+   "Plan my day, energy's low." The server picks two priorities.
+2. **Work:** A terse email from a manager is forwarded to the Telegram bot. A triage card comes
+   back: most likely meaning, priority, the ask, a related promise, a draft reply. One tap sets a
+   reminder. Later: "Alexa, what needs me?" lists it by voice.
 3. **Afternoon:** Hyperfocus check-in: "You've been on this 3.5 hours. Water?"
 4. **Evening:** Third loop on the same worry. The guardrail redirects to one concrete action.
+   "Wrap up": unfinished work rolls to tomorrow, and the pinned Today message updates.
 
 ## Judging fit
 
@@ -153,7 +163,8 @@ Each step is demoable on its own. Three solid pillars beat four half-built ones.
 
 ## Submission checklist
 
-- [ ] Public repo, open-source license (Open Source mini-challenge)
+- [ ] Public repo, open-source license (Open Source mini-challenge). No `LICENSE` file yet;
+      repo is private. Add MIT or Apache-2.0 before making it public.
 - [ ] AWS usage documented: Bedrock, DynamoDB (AWS Builder mini-challenge)
 - [ ] Demo video < 3 min, English, public
 - [ ] Product feedback on every tool, API, and SDK used

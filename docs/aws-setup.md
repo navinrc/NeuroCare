@@ -4,7 +4,7 @@ One-time setup for NeuroCare's AWS resources (Bedrock, DynamoDB, Lambda) and for
 Agent Toolkit for AWS from Claude Code with read-only access.
 
 > Needed from **spec phase 3** (Bedrock translator) onward. Phases 1–2 run fully local on SQLite.
-> See [`spec.md`](spec.md) §3 and §11.
+> Section 6 (Telegram) is needed only for **phase 6b**. See [`spec.md`](spec.md) §3 and §11.
 
 ## 1. Account
 
@@ -71,6 +71,10 @@ agent's permission set so it can also read logs and stack status for troubleshoo
         "lambda:GetFunctionUrlConfig",
         "cloudwatch:GetMetricData",
         "cloudwatch:ListMetrics",
+        "scheduler:GetSchedule",
+        "scheduler:ListSchedules",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:ListSecrets",
         "sts:GetCallerIdentity"
       ],
       "Resource": "*"
@@ -128,7 +132,33 @@ What stays manual (you, with `neurocare-admin`):
 - `cdk bootstrap` / `cdk deploy` / `cdk destroy`
 - Bedrock model access, Guardrail creation, budgets, IAM changes
 
-## 6. Checklist
+## 6. Telegram bot (phase 6b)
+
+Optional companion channel ([spec §5.7](spec.md#57-telegram-companion)). Skip until the
+Lambda Function URL exists.
+
+1. In Telegram, message **@BotFather** → `/newbot` → pick a name and username. Copy the bot token.
+2. Generate a webhook secret (1–256 chars of `A-Z a-z 0-9 _ -`):
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+3. Store both in **Secrets Manager** (`us-east-1`), e.g. secret `neurocare/telegram` with keys
+   `bot_token` and `webhook_secret`. CDK grants the Lambda read access; never put them in `.env`
+   files that get committed.
+4. After `cdk deploy`, register the webhook so Telegram sends the secret header on every call:
+   ```bash
+   curl -s "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
+     -d "url=$FUNCTION_URL/telegram" \
+     -d "secret_token=$WEBHOOK_SECRET" \
+     -d 'allowed_updates=["message","callback_query"]'
+   ```
+   Check with `getWebhookInfo`. For local dev, skip the webhook and run the long-polling mode.
+5. Confirm the **EventBridge Scheduler** rule (every 15 min) exists after deploy; it drives
+   the bot's opt-in messages.
+
+Privacy reminder: bot chats are not end-to-end encrypted. Demo with synthetic messages only.
+
+## 7. Checklist
 
 - [ ] Account created, root MFA on
 - [ ] Identity Center user + `neurocare-admin` profile
@@ -138,6 +168,8 @@ What stays manual (you, with `neurocare-admin`):
 - [ ] Backstop deny statement on `neurocare-admin`
 - [ ] `aws-core` plugin installed, using `neurocare-agent`
 - [ ] `aws sts get-caller-identity` works for both profiles
+- [ ] (Phase 6b) Telegram bot created; token + webhook secret in Secrets Manager
+- [ ] (Phase 6b) Webhook registered with `secret_token`; Scheduler rule present
 
 ## References
 

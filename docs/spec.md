@@ -21,7 +21,7 @@ self-reinforcing loops.
 |---|---|
 | Memory | User-owned facts, people, preferences, commitments, open loops |
 | Sense of time | Work blocks, elapsed time, next commitment, leave-by buffers, drift check-ins |
-| Ambiguity translator | Decode a message's literal meaning, likely intent, temperature, and reply needs |
+| Ambiguity translator | Decode and triage a message: summary, likely intent, tone, priority, reply needs, asks, related promises, and a draft reply |
 | Task breakdown | Split a vague goal into small, time-boxed steps; surface one step at a time |
 | Guardrail | Crisis path, rumination detection, hyperfocus check-ins, user overrides |
 | Daily plan | Brain-dump capture, top-3 priorities picked by the server, gentle end-of-day rollover, pinned Today message in Telegram |
@@ -33,7 +33,7 @@ self-reinforcing loops.
 - Multi-user OAuth account linking (designed for, built later)
 - Meeting transcript briefs, tone checking/rewriting of the user's own drafts
 - Workspace connectors that read Slack / Teams / mail on the user's behalf (post-hackathon;
-  MVP input is user-supplied text only, via voice, paste, or `POST /inbox`)
+  MVP input is user-supplied text only, via voice, paste, `POST /inbox`, or the Telegram bot)
 - Third-party agent gateways (e.g. Hermes Agent) — optional future bridge into `POST /inbox`;
   never a second reasoning agent
 - Full planner features: monthly goals, habit streaks, meal logging, mood charts, an editable
@@ -74,7 +74,7 @@ sequenceDiagram
     S->>P: run tool
     P->>D: Query PK=USER#id
     D-->>P: items
-    opt language task (decode, decompose)
+    opt language task (decode, decompose, split_step, brain_dump)
         P->>B: Converse (5 s timeout)
         B-->>P: JSON or timeout → baseline
     end
@@ -100,6 +100,7 @@ sequenceDiagram
 | Bedrock model | Claude Haiku 4.5, configurable via `BEDROCK_MODEL_ID` (Nova can be swapped in) |
 | Infrastructure as code | AWS CDK (Python), in `infra/` |
 | Transport | Streamable HTTP only (hackathon requirement) |
+| Channels | Alexa+ (voice, MCP) is the primary channel. Telegram bot (§5.7) is an optional companion for reading, forwarding, and opt-in nudges; it calls the same pillar functions. No web UI |
 
 ## 4. Conventions for every tool
 
@@ -246,7 +247,7 @@ text) with its result attached, TTL 7 days. This is what lets the Telegram card 
 pinned Today message, and `triage_inbox` show the same result whichever channel produced it.
 
 #### Input paths
-Reading a long message aloud is the main friction, so three paths feed the same tool:
+Reading a long message aloud is the main friction, so four paths feed the same tool:
 
 | Path | Best for | How |
 |---|---|---|
@@ -680,7 +681,7 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `PERSON#<name>` | person | `role`, `notes`, `aliases` |
 | `BLOCK#` | work block | `task`, `started_at`, `ended_at`, `summary` |
 | `TASK#` | task breakdown | `goal`, `steps`, `active`, `cursor` |
-| `INBOX#` | forwarded message | `text`, `sender`, `source`, `decoded_at`, `ttl` |
+| `INBOX#` | received message + triage | `text`, `sender`, `source`, `decoded_at`, `result` (decode output), `resolved_at`, `ttl` |
 | `ITEM#` | brain-dump item | `text`, `tag`, `bucket`, `due_at`, `status` |
 | `PLAN#<date>` | daily plan | `priorities` (item ids), `energy`, `wrapped_at` |
 | `TOPIC#` | rumination topic | `text`, `embedding`, `ttl` |
@@ -697,9 +698,10 @@ Two items live outside the user partition, because the caller knows only a chat 
 | `LINKCODE#<code>` / `CODE` | pending link code | `user_id`, `ttl` (10 minutes) |
 
 - `embedding`: float32 vector stored as binary (1024 dims for Titan v2 at default size).
-- TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days.
-- Access is always by `PK` (single user partition, or the two lookup items above); similarity is computed in-process — per-user
-  corpora are small. No vector database: at ~2,000 vectors × 1024 dims (~8 MB) a brute-force
+- TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days; `PUSH#` after 2 days; `LINKCODE#` after
+  10 minutes.
+- Access is always by `PK` (single user partition, or the two lookup items above); similarity is
+  computed in-process — per-user corpora are small. No vector database: at ~2,000 vectors × 1024 dims (~8 MB) a brute-force
   cosine scan is a few milliseconds with numpy; the cost is the paginated DynamoDB read, paid
   only when exact/alias/fuzzy recall all miss. Revisit only if a user exceeds ~5,000 vectors (§12).
 - **Embedding availability by phase:** phases 1–2 have no Bedrock client, so the embedding tier
@@ -736,7 +738,7 @@ erDiagram
     PERSON { string role string notes list aliases }
     BLOCK { string task datetime started_at datetime ended_at string summary }
     TASK { string goal list steps bool active int cursor }
-    INBOX { string text string sender string source datetime decoded_at number ttl }
+    INBOX { string text string sender string source datetime decoded_at map result datetime resolved_at number ttl }
     TOPIC { string text binary embedding number ttl }
     NEED { string kind number ttl }
     OVERRIDE { string token datetime active_until }
@@ -818,7 +820,8 @@ src/alexa_mcp_server/
   safety/crisis.py   phrase list + ApplyGuardrail
   lambda_handler.py  ASGI → Lambda adapter
 profile_seed.yaml
-infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail), Guardrail
+infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail), Guardrail,
+                     EventBridge Scheduler rule, Secrets Manager secrets (Telegram bot token, webhook secret)
 ```
 
 Pillar modules are plain functions taking `(store, llm, user_id, ...)` so they are testable
@@ -875,8 +878,8 @@ Each phase is demoable on its own.
 | 1 | Store interface + SQLite, auth, memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
 | 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty; triage fields present (`related` resolved from seeded commitments, `cues` from baseline); a message containing injected instructions yields a normal result with no side effects; `triage_inbox` orders by priority → reply_by → age and decodes at most 3 per call |
-| 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits all four text tools (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
-| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item); `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
+| 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits `remember`, `decode`, `log_topic`, and `decompose` (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
+| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item) and is short-circuited by the crisis precheck; `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
 | 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
 | 6b | Telegram companion | Link code flow (expiry, single use); webhook rejects a missing/wrong secret header; unlinked chat rejected; forwarded text → triage card with buttons; buttons call `remember` / `brain_dump` / feedback; pinned Today message edited on plan change; push cap and quiet hours honored (clock fixture); local long-polling dev mode works |
 | 7 | Stretch | `reality_check(claim)`; Cognito OAuth 2.1 |
