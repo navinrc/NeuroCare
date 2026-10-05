@@ -4,7 +4,7 @@ One-time setup for NeuroCare's AWS resources (Bedrock, DynamoDB, Lambda) and for
 Agent Toolkit for AWS from Claude Code with read-only access.
 
 > Needed from **spec phase 3** (Bedrock translator) onward. Phases 1–2 run fully local on SQLite.
-> Section 6 (Telegram) is needed only for **phase 6b**. See [`spec.md`](spec.md) §3 and §11.
+> Section 6 (Cognito) is needed at **phase 6**; section 7 (Telegram) only for **phase 6b**. See [`spec.md`](spec.md) §3 and §11.
 
 ## 1. Account
 
@@ -132,7 +132,25 @@ What stays manual (you, with `neurocare-admin`):
 - `cdk bootstrap` / `cdk deploy` / `cdk destroy`
 - Bedrock model access, Guardrail creation, budgets, IAM changes
 
-## 6. Telegram bot (phase 6b)
+## 6. Cognito account linking (phase 6)
+
+Alexa+ links accounts with OAuth 2.1 only ([spec §3](spec.md#3-locked-decisions)). CDK creates
+these; the list is what to check in the console.
+
+1. **User pool** in `us-east-1` with a hosted UI domain (e.g. `neurocare-demo.auth.us-east-1.amazoncognito.com`).
+2. **App client:** authorization code grant only (no implicit), **PKCE required (S256)**,
+   refresh tokens enabled (e.g. 30-day validity), a confidential client with a secret, scopes `openid` plus a
+   custom scope such as `neurocare/tools`.
+3. **Callback URLs:** add every redirect URI the Alexa developer console shows for the add-on
+   (there are several; register all of them).
+4. **Demo user:** create one user for the demo account; its `sub` becomes the `user_id`.
+5. **Alexa developer console → account linking:** authorization URI, token URI, client ID and
+   secret, and scopes from the steps above.
+6. **Check:** `curl $FUNCTION_URL/.well-known/oauth-protected-resource` returns the resource URL
+   and the Cognito issuer, and a request without a token gets `401` with `WWW-Authenticate`.
+7. Keep `ALLOW_STATIC_TOKEN` **off** in the deployed Lambda.
+
+## 7. Telegram bot (phase 6b)
 
 Optional companion channel ([spec §5.7](spec.md#57-telegram-companion)). Skip until the
 Lambda Function URL exists.
@@ -171,7 +189,7 @@ Needs a domain you control (a subdomain is enough).
 5. Test: forward a synthetic email from an allowed address and check it shows up as a
    Telegram card or under "Alexa, what needs me?". Mail from other addresses must not appear.
 
-## 7. Checklist
+## 8. Checklist
 
 - [ ] Account created, root MFA on
 - [ ] Identity Center user + `neurocare-admin` profile
@@ -181,6 +199,7 @@ Needs a domain you control (a subdomain is enough).
 - [ ] Backstop deny statement on `neurocare-admin`
 - [ ] `aws-core` plugin installed, using `neurocare-agent`
 - [ ] `aws sts get-caller-identity` works for both profiles
+- [ ] (Phase 6) Cognito user pool, PKCE app client, Alexa redirect URIs, account linking configured; `ALLOW_STATIC_TOKEN` off
 - [ ] (Phase 6b) Telegram bot created; token + webhook secret in Secrets Manager
 - [ ] (Phase 6b) Webhook registered with `secret_token`; Scheduler rule present
 - [ ] (Optional) SES domain verified, MX record set, receipt rule set active, allowlist seeded

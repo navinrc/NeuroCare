@@ -19,7 +19,7 @@ from diagrams.aws.general import User
 from diagrams.aws.iot import IotAlexaEcho, IotAlexaVoiceService
 from diagrams.aws.management import Cloudformation, CloudwatchLogs
 from diagrams.aws.ml import Bedrock
-from diagrams.aws.security import KMS, IAMRole, SecretsManager
+from diagrams.aws.security import KMS, Cognito, IAMRole, SecretsManager
 from diagrams.aws.storage import SimpleStorageServiceS3
 from diagrams.generic.database import SQL
 from diagrams.onprem.client import Client
@@ -73,6 +73,9 @@ with Diagram(
             ses = SimpleEmailServiceSes("SES inbound\n(allowlist + SPF/DKIM)")
             raw = SimpleStorageServiceS3("S3 raw MIME\n(1-day lifecycle)")
 
+        with Cluster("Identity", graph_attr={"bgcolor": "#FDEEEE"}):
+            cognito = Cognito("Cognito user pool\n(OAuth 2.1 + PKCE)")
+
         with Cluster("Data", graph_attr={"bgcolor": "#EEF3FB"}):
             table = DynamodbTable("cognitive-substrate\n(PK=USER#id)")
             kms = KMS("KMS\n(encryption at rest)")
@@ -93,7 +96,9 @@ with Diagram(
         sqlite = SQL("SQLite")
 
     user >> Edge(label="speaks") >> echo >> alexa
-    alexa >> Edge(label="MCP · Streamable HTTP\nBearer token", color=AWS_ORANGE, style="bold") >> mcp
+    alexa >> Edge(label="MCP · Streamable HTTP\nCognito access token", color=AWS_ORANGE, style="bold") >> mcp
+    alexa >> Edge(label="account linking", style="dashed", color=AWS_BLUE) >> cognito
+    cognito - Edge(label="JWKS", style="dotted", color=GREY) - mcp
     user >> Edge(label="forwards · taps", color=TELEGRAM_BLUE) >> telegram
     telegram >> Edge(label="webhook POST /telegram\nsecret header", color=TELEGRAM_BLUE) >> mcp
     mcp >> Edge(label="Bot API sendMessage", color=TELEGRAM_BLUE, style="dashed") >> telegram

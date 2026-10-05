@@ -176,5 +176,6 @@ Each step is demoable on its own. Three solid pillars beat four half-built ones.
 
 - Does Alexa+ honor MCP server `instructions`, and how strongly? (Mitigations in [spec §12](docs/spec.md#12-open-risks); verify during testing.)
 - ~~Does Alexa+ support MCP sampling or elicitation?~~ Resolved: design assumes no; server calls Bedrock itself ([spec §2](docs/spec.md#2-alexa-constraints-and-design-responses)).
-- ~~Auth/account linking model for a per-user memory store.~~ Resolved for MVP: bearer token → single `user_id`; OAuth 2.1 later ([spec §3](docs/spec.md#3-locked-decisions)).
+- ~~Auth/account linking model for a per-user memory store.~~ Resolved: Alexa+ links accounts with OAuth 2.1 only, so Cognito account linking (PKCE S256, refresh tokens) is in the MVP ([spec §3](docs/spec.md#3-locked-decisions)).
+- ~~Alexa+ latency budget.~~ Resolved: Alexa+ needs < 500 ms round trip, so LLM-backed tools answer from a deterministic baseline and refine in the background ([spec §4](docs/spec.md#4-conventions-for-every-tool)).
 - ~~Final name.~~ Resolved: **NeuroCare**.
