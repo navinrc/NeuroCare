@@ -2,7 +2,7 @@
 
 **NeuroCare** is a cognitive substrate for Alexa+: an MCP server that gives neurodivergent
 people persistent memory, a sense of time, a translator for ambiguous messages, task
-breakdown, and guardrails against rumination and hyperfocus.
+breakdown, a low-overwhelm daily plan, and guardrails against rumination and hyperfocus.
 
 > Status: **Draft v1 — decisions locked, no implementation yet**
 > Companion to [`idea_draft.md`](../idea_draft.md). The idea draft explains *why*; this spec
@@ -592,7 +592,7 @@ flowchart LR
         subgraph SRV["MCP server · Lambda (Python, stateless)"]
             TOOLS[Tool layer<br/>server.py] --> AUTH[auth<br/>token → user_id]
             TOOLS --> SAFE[safety<br/>crisis precheck]
-            TOOLS --> PIL[pillars<br/>memory · time · translator<br/>tasks · guardrail]
+            TOOLS --> PIL[pillars<br/>memory · time · translator<br/>tasks · guardrail · plan]
             PIL --> LLMC[llm client]
             PIL --> STC[store interface]
             SAFE --> LLMC

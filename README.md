@@ -1,6 +1,6 @@
 # NeuroCare
 
-A cognitive substrate for Alexa+: an MCP server that gives neurodivergent people persistent memory, a sense of time, a translator for ambiguous messages, task breakdown, and guardrails against rumination and hyperfocus.
+A cognitive substrate for Alexa+: an MCP server that gives neurodivergent people persistent memory, a sense of time, a translator for ambiguous messages, task breakdown, a low-overwhelm daily plan, and guardrails against rumination and hyperfocus.
 
 See the [spec](docs/spec.md) for design, tools, and AWS architecture, and
 [AWS setup](docs/aws-setup.md) for account, Bedrock, and agent-toolkit configuration.
