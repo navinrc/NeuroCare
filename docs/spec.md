@@ -30,6 +30,10 @@ self-reinforcing loops.
 - Sycophancy `reality_check` (stretch goal, phase 7)
 - Multi-user OAuth account linking (designed for, built later)
 - Meeting transcript briefs, tone checking/rewriting of the user's own drafts
+- Workspace connectors that read Slack / Teams / mail on the user's behalf (post-hackathon;
+  MVP input is user-supplied text only, via voice, paste, or `POST /inbox`)
+- Third-party agent gateways (e.g. Hermes Agent) — optional future bridge into `POST /inbox`;
+  never a second reasoning agent
 - Any medical, diagnostic, or treatment functionality
 
 ## 2. Alexa+ constraints and design responses
@@ -223,12 +227,25 @@ The `speak` quotes the user's own task wording and states facts, not instruction
 
 ### 5.3 Ambiguity translator
 
-#### `decode(message, sender=None)`
+#### `decode(message=None, sender=None)`
 
 | Param | Type | Notes |
 |---|---|---|
-| `message` | str (≤ 4000) | The message the user received |
-| `sender` | str? | Name; resolved against `person` memories |
+| `message` | str? (≤ 4000) | The message the user received. If omitted, the newest undecoded inbox item is used (`NOT_FOUND` if none) |
+| `sender` | str? | Name; resolved against `person` memories. Inbox items supply their own sender |
+
+#### Input paths
+Reading a long message aloud is the main friction, so three paths feed the same tool:
+
+| Path | Best for | How |
+|---|---|---|
+| Speak it | 1–2 sentences | "What does Priya mean by 'let's circle back'?" → `decode(message=…)` |
+| Type or paste | Longer text | Alexa app / alexa.com text chat → same `decode(message=…)` call |
+| Forward it | Long emails, threads | iOS Share Sheet shortcut (or similar) posts to `POST /inbox`; user then says "decode the message I just sent" → `decode()` |
+
+`POST /inbox` is a plain HTTP route on the same server (not an MCP tool), same bearer token.
+Body: `{ text: str (≤ 4000), sender?: str, source?: str }`. Stores an `INBOX#` item (TTL 7 days).
+Returns `{ id }`. The crisis precheck runs when the item is decoded, not on ingest.
 
 Returns
 ```
@@ -239,6 +256,8 @@ Returns
   reply_needed: bool,
   reply_by?: str,
   suggested_reply?: str,          # in the user's register from profile
+  suggest_reminder_minutes?: int, # set when reply_by is known
+  needs_work: bool,               # message asks for a deliverable → Alexa may offer decompose
   sender_context_used: bool,
   source: "llm" | "baseline",
   speak
@@ -269,12 +288,23 @@ flowchart TD
 `speak` gives the most likely reading first, then whether a reply is needed:
 "Most likely Priya just wants a status update — she's usually this short. Not urgent. A one-line reply today is fine."
 
+Low-friction rules:
+- `speak` carries only the verdict. `literal`, other intents, and `suggested_reply` are spoken
+  only when the user asks ("what should I say?").
+- At most one follow-up offer per result: a reminder (`suggest_reminder_minutes`) **or**
+  "want me to break that into steps?" (`needs_work`), not both.
+- Unknown sender: still answer; offer once to remember who they are.
+
 ### 5.4 Task breakdown
 
 #### `decompose(goal, max_step_minutes=25)`
 Splits a goal into 3–12 ordered steps, each 5–90 minutes (capped by `max_step_minutes`) and each
-starting with a concrete verb. Stored as the user's active task list, replacing any previous one
-(the old list is kept and marked inactive).
+starting with a concrete verb. Step 1 is always ≤ 5 minutes and physical ("put last year's
+return on the desk"), so starting costs almost nothing. No clarifying questions before the first
+step; the plan is fixed later with `split_step` / `skip_step`. Stored as the user's active task
+list, replacing any previous one (the old list is kept and marked inactive).
+Alexa calls it on overwhelm phrasing too ("I don't know where to start with my taxes"), not only
+on explicit "break this down" requests (see §10).
 Returns `{ task_id, steps: [{ n, text, minutes }], speak }`; `speak` reads only step 1.
 If Bedrock fails, returns `{ steps: [], fallback_hint, speak }` where `fallback_hint` asks Alexa to
 break the goal down itself and save it with `remember(kind=commitment)`.
@@ -284,6 +314,17 @@ Returns only the next undone step of the active task: `{ n, text, minutes, remai
 
 #### `done_step()`
 Marks the current step done. Returns `{ completed, next?: {...}, remaining, speak }`.
+If a work block is open for the step, it is closed; the next step opens a new block sized to its
+`minutes`, so `check_in` drift applies per step.
+
+#### `split_step()`
+"This one's too big." Replaces only the current step with 2–4 smaller steps (Bedrock, same
+validation; step 1 ≤ 5 minutes). Returns `{ steps: [...], remaining, speak }`; `speak` reads the
+new first step. On LLM failure returns `fallback_hint` like `decompose`.
+
+#### `skip_step()`
+"Not now." Moves the current step to the end of the list. Returns `{ skipped, next, remaining, speak }`.
+Skipping the only remaining step returns it unchanged with a `speak` saying it is the last one.
 
 ```mermaid
 flowchart LR
@@ -295,6 +336,10 @@ flowchart LR
     V -- yes --> ACT[Save as active task<br/>speak step 1 only]
     ACT --> N[next_step]
     N --> D[done_step]
+    N -. too big .-> SP[split_step]
+    N -. not now .-> SK[skip_step]
+    SP --> N
+    SK --> N
     D --> M{Steps left?}
     M -- yes --> N
     M -- no --> DONE([Task complete])
@@ -429,13 +474,14 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `PERSON#<name>` | person | `role`, `notes`, `aliases` |
 | `BLOCK#` | work block | `task`, `started_at`, `ended_at`, `summary` |
 | `TASK#` | task breakdown | `goal`, `steps`, `active`, `cursor` |
+| `INBOX#` | forwarded message | `text`, `sender`, `source`, `decoded_at`, `ttl` |
 | `TOPIC#` | rumination topic | `text`, `embedding`, `ttl` |
 | `NEED#` | water/food/break log | `kind`, `ttl` |
 | `OVERRIDE#` | override log | `token`, `active_until` |
 | `STATE` | pointers | `open_block_id`, `active_task_id`, `crisis_flag_at` |
 
 - `embedding`: float32 vector stored as binary (1024 dims for Titan v2 at default size).
-- TTL: `TOPIC#` and `NEED#` expire after 7 days.
+- TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days.
 - Access is always by `PK` (single user partition); similarity is computed in-process — per-user
   corpora are small.
 
@@ -447,6 +493,7 @@ erDiagram
     USER ||--o{ PERSON : "SK=PERSON#name"
     USER ||--o{ BLOCK : "SK=BLOCK#ulid"
     USER ||--o{ TASK : "SK=TASK#ulid"
+    USER ||--o{ INBOX : "SK=INBOX#ulid"
     USER ||--o{ TOPIC : "SK=TOPIC#ulid"
     USER ||--o{ NEED : "SK=NEED#ulid"
     USER ||--o{ OVERRIDE : "SK=OVERRIDE#ulid"
@@ -461,6 +508,7 @@ erDiagram
     PERSON { string role string notes list aliases }
     BLOCK { string task datetime started_at datetime ended_at string summary }
     TASK { string goal list steps bool active int cursor }
+    INBOX { string text string sender string source datetime decoded_at number ttl }
     TOPIC { string text binary embedding number ttl }
     NEED { string kind number ttl }
     OVERRIDE { string token datetime active_until }
@@ -558,7 +606,13 @@ You are connected to a personal cognitive support server for this user.
   with a short description of the worry, before answering.
 - When the user starts or finishes a piece of work, call start_block or end_block.
 - When a tool result includes suggest_reminder_minutes, offer to set an Alexa reminder for that time.
-- When the user asks what a message means, call decode.
+- When the user asks what a message means, call decode. If they refer to a message they just
+  sent or forwarded, call decode with no message.
+- When decode returns needs_work or reply_needed, make at most one offer: a reminder or a breakdown.
+- When the user sounds overwhelmed by a goal ("I don't know where to start", "this is too much"),
+  call decompose with the goal. Do not ask clarifying questions first.
+- When the user says "done", "next", "too big", or "not now" during a task, call done_step,
+  next_step, split_step, or skip_step.
 - Speak the `speak` field from tool results in plain, literal words. Do not add idioms.
 - Prefer accuracy over agreement. If the user's claim conflicts with what memory shows, say so gently.
 - If a tool result has crisis: true, say only the provided message and resources. Do not redirect,
@@ -574,9 +628,9 @@ Each phase is demoable on its own.
 |---|---|---|
 | 1 | Store interface + SQLite, auth, memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
-| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test |
+| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty |
 | 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits all four text tools (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
-| 5 | Task breakdown | Steps validated (count, minutes, verb-first); `next_step`/`done_step` walk the list; fallback on LLM failure |
+| 5 | Task breakdown | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure |
 | 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
 | 7 | Stretch | `reality_check(claim)`; Cognito OAuth 2.1 |
 
@@ -618,3 +672,4 @@ flowchart LR
 | Exact v2 `MCPServer` option for stateless HTTP / JSON response mode | Verify against current SDK docs at start of phase 6 |
 | Lambda cold starts | Keep dependencies small; provisioned concurrency only if needed for demo |
 | False positives in rumination/hyperfocus | Configurable thresholds, `lower_sensitivity` override, facts-not-instructions wording |
+| Scope creep into a second agent or broad inbox access | Alexa+ is the only agent; connectors only forward user-chosen messages to `/inbox` |
