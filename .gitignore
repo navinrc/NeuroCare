@@ -16,6 +16,9 @@ wheels/
 .coverage
 htmlcov/
 
+# Local data (SQLite store)
+.data/
+
 # Secrets / env
 .env
 .env.*

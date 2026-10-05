@@ -19,13 +19,22 @@ per the track requirements.
 ```bash
 uv sync
 cp .env.example .env          # optional: HOST / PORT
+uv run alexa-mcp-seed --reset # load synthetic demo data (profile_seed.yaml) into .data/
 uv run alexa-mcp-server       # http://127.0.0.1:8000/mcp
+```
+
+Without auth env vars every request is served as `DEMO_USER_ID` (default `demo`). To require a
+bearer token locally:
+```bash
+ALLOW_STATIC_TOKEN=true AUTH_TOKEN=devtoken uv run alexa-mcp-server
 ```
 
 Inspect with the MCP Inspector:
 ```bash
 npx @modelcontextprotocol/inspector
 # Transport: Streamable HTTP, URL: http://127.0.0.1:8000/mcp
+# With a static token: add header  Authorization: Bearer devtoken
+# Try: what_was_i_doing, recall("my boss"), open_loops
 ```
 
 ## Development
@@ -38,9 +47,17 @@ uv run ruff format .
 ## Project layout
 ```
 src/alexa_mcp_server/
-  server.py      # MCPServer instance, tools, entrypoint
-tests/
-  test_server.py # in-process client tests
+  server.py          # MCPServer instance, thin tool layer, entrypoint
+  config.py          # env settings
+  auth.py            # static dev token (Cognito JWT in phase 6)
+  store/             # Store interface + SQLite backend
+  pillars/memory.py  # memory tools, profile, seed loader
+  profile.py         # profile schema, defaults, validation
+  matching.py        # tiered recall: exact → alias → fuzzy
+  speech.py          # short spoken-text helpers
+  seed.py            # alexa-mcp-seed CLI
+profile_seed.yaml    # synthetic demo data
+tests/               # pytest; in-process MCP client + pillar tests
 ```
 
 ## Resources

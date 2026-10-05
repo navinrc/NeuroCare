@@ -9,10 +9,12 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=2.2.0",
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]
 alexa-mcp-server = "alexa_mcp_server:main"
+alexa-mcp-seed = "alexa_mcp_server.seed:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
