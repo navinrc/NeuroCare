@@ -24,6 +24,7 @@ self-reinforcing loops.
 | Ambiguity translator | Decode a message's literal meaning, likely intent, temperature, and reply needs |
 | Task breakdown | Split a vague goal into small, time-boxed steps; surface one step at a time |
 | Guardrail | Crisis path, rumination detection, hyperfocus check-ins, user overrides |
+| Daily plan | Brain-dump capture, top-3 priorities picked by the server, gentle end-of-day rollover, read-only `/today` card |
 
 ### Out of scope (MVP)
 
@@ -34,6 +35,8 @@ self-reinforcing loops.
   MVP input is user-supplied text only, via voice, paste, or `POST /inbox`)
 - Third-party agent gateways (e.g. Hermes Agent) — optional future bridge into `POST /inbox`;
   never a second reasoning agent
+- Full planner features: monthly goals, habit streaks, meal logging, mood charts, an editable
+  planner UI (the `/today` card is read-only)
 - Any medical, diagnostic, or treatment functionality
 
 ## 2. Alexa+ constraints and design responses
@@ -104,7 +107,7 @@ sequenceDiagram
   and "last topic" itself. IDs appear in results for traceability but are never required as input
   (tools that act on an item accept free text and resolve it).
 - **Crisis precheck:** tools that accept free user text (`remember`, `decode`, `log_topic`,
-  `decompose`) run the crisis check first. On a hit they return the crisis result (§6) and do
+  `decompose`, `brain_dump`) run the crisis check first. On a hit they return the crisis result (§6) and do
   nothing else.
 - **Errors:** returned as `{ "error": { "code": str, "message": str }, "speak": str }`.
   Common codes: `UNAUTHORIZED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `LLM_UNAVAILABLE` (only when no
@@ -397,10 +400,54 @@ Fixed token set:
 Every override is logged with a timestamp. Overrides never apply to the crisis path.
 Returns `{ token, active_until?, speak }`.
 
+### 5.6 Daily plan
+
+Borrows the useful parts of ADHD paper planners (brain dump, top-3 focus, triage, rollover)
+without their overhead. The server sorts and ranks; the user only captures and confirms.
+Never more than `plan.max_priorities` items spoken, never a full list read aloud.
+
+#### `brain_dump(text)`
+"Brain dump: renew passport, mom's birthday Sunday, fix the slides."
+Captures one or more items with no follow-up questions. Bedrock splits the text into items, tags
+each `work | personal | life | admin`, extracts `due_at` if mentioned, and sets a triage `bucket`
+(`must | should | could | wait`). On LLM failure the whole text is stored as one untagged item
+with `bucket: should`.
+Returns `{ items: [{ id, text, tag, bucket, due_at? }], source: "llm" | "baseline", speak }`.
+`speak`: "Saved 3. Birthday marked for Sunday."
+
+#### `plan_today(energy=None)`
+"Plan my day." Proposes today's priorities from open items, open loops (§5.1), and undecoded
+inbox items. Ranking is deterministic: due date, then `bucket`, then `decode` urgency
+(`reply_by`, temperature), then age.
+
+| `energy` (1–5, optional) | Effect |
+|---|---|
+| 1–2 | 1 priority; active task `max_step_minutes` drops to 10 |
+| 3 | 2 priorities |
+| 4–5 or none | `plan.max_priorities` (default 3) |
+
+Stores a `PLAN#<date>` item, replacing an earlier plan for the same day.
+Returns `{ date, priorities: [{ id, text, due_at? }], open_count, speak }`.
+`speak` names the picks and asks one confirmation: "Nine things open. I suggest two: send the
+slides, reply to Priya. Start with the slides?" If the user swaps one ("not Priya, the dentist"),
+Alexa calls `plan_today` again; the plan is never edited item by item by voice.
+
+#### `wrap_up()`
+"Wrap up for today." Marks done items, moves unfinished priorities to tomorrow when
+`plan.rollover` is true, and closes any open block.
+Returns `{ done: [...], rolled_over: [...], speak }`.
+`speak` is factual and neutral, with no streaks or scores: "Slides done. Priya moved to tomorrow."
+
+#### `GET /today`
+Read-only HTML card on the same server, bearer token as `?token=` or header, for a phone
+home-screen glance. Shows today's focus (first priority), the priority list with done marks, the
+active task's current step, and the count of unsorted brain-dump items. No editing, no history,
+no charts. Plain server-rendered HTML, works without JavaScript.
+
 ## 6. Safety
 
 ### Crisis path
-- Runs **before** any other logic in `remember`, `decode`, `log_topic`, `decompose`.
+- Runs **before** any other logic in `remember`, `decode`, `log_topic`, `decompose`, `brain_dump`.
 - Step 1: deterministic phrase list (self-harm, suicide, "can't go on", etc.), case- and
   punctuation-insensitive. Always available, no network.
 - Step 2: Bedrock Guardrails `ApplyGuardrail` on the same text (self-harm/violence filters).
@@ -414,7 +461,7 @@ Returns `{ token, active_until?, speak }`.
 
 ```mermaid
 flowchart TD
-    T([Free user text from remember / decode /<br/>log_topic / decompose]) --> K{Phrase list match?<br/>offline, always on}
+    T([Free user text from remember / decode /<br/>log_topic / decompose / brain_dump]) --> K{Phrase list match?<br/>offline, always on}
     K -- yes --> HIT
     K -- no --> G{Bedrock ApplyGuardrail<br/>self-harm / violence}
     G -- intervened --> HIT
@@ -458,6 +505,8 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `guardrail.preferred_redirects` | str[] | preset list | Concrete actions offered on rumination |
 | `people` | map name → `{role, notes, aliases[]}` | {} | Mirrors `person` memories for fast lookup |
 | `consent.embeddings` | bool | `true` | If false, recall/rumination skip the embedding tier |
+| `plan.max_priorities` | int 1–3 | 3 | Upper bound for `plan_today` |
+| `plan.rollover` | bool | `true` | `wrap_up` moves unfinished priorities to tomorrow |
 
 ## 8. Data model
 
@@ -475,6 +524,8 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `BLOCK#` | work block | `task`, `started_at`, `ended_at`, `summary` |
 | `TASK#` | task breakdown | `goal`, `steps`, `active`, `cursor` |
 | `INBOX#` | forwarded message | `text`, `sender`, `source`, `decoded_at`, `ttl` |
+| `ITEM#` | brain-dump item | `text`, `tag`, `bucket`, `due_at`, `status` |
+| `PLAN#<date>` | daily plan | `priorities` (item ids), `energy`, `wrapped_at` |
 | `TOPIC#` | rumination topic | `text`, `embedding`, `ttl` |
 | `NEED#` | water/food/break log | `kind`, `ttl` |
 | `OVERRIDE#` | override log | `token`, `active_until` |
@@ -497,6 +548,9 @@ erDiagram
     USER ||--o{ TOPIC : "SK=TOPIC#ulid"
     USER ||--o{ NEED : "SK=NEED#ulid"
     USER ||--o{ OVERRIDE : "SK=OVERRIDE#ulid"
+    USER ||--o{ ITEM : "SK=ITEM#ulid"
+    USER ||--o{ PLAN : "SK=PLAN#date"
+    PLAN }o--o{ ITEM : priorities
     STATE |o--o| BLOCK : open_block_id
     STATE |o--o| TASK : active_task_id
     MEM }o--o| PERSON : subject
@@ -512,6 +566,8 @@ erDiagram
     TOPIC { string text binary embedding number ttl }
     NEED { string kind number ttl }
     OVERRIDE { string token datetime active_until }
+    ITEM { string text string tag string bucket datetime due_at string status }
+    PLAN { list priorities int energy datetime wrapped_at }
 ```
 
 ### SQLite (local)
@@ -575,7 +631,8 @@ src/alexa_mcp_server/
   auth.py            bearer token → user_id
   store/             base.py (interface), sqlite.py, dynamo.py
   llm/               bedrock.py, fake.py (tests)
-  pillars/           memory.py, time.py, translator.py, tasks.py, guardrail.py
+  pillars/           memory.py, time.py, translator.py, tasks.py, guardrail.py, plan.py
+  web/today.py       read-only GET /today card (plus POST /inbox route)
   safety/crisis.py   phrase list + ApplyGuardrail
   lambda_handler.py  ASGI → Lambda adapter
 profile_seed.yaml
@@ -617,6 +674,10 @@ You are connected to a personal cognitive support server for this user.
 - Prefer accuracy over agreement. If the user's claim conflicts with what memory shows, say so gently.
 - If a tool result has crisis: true, say only the provided message and resources. Do not redirect,
   coach, or change the subject.
+- When the user lists things to remember or says "brain dump", call brain_dump. Do not ask questions.
+- When the user asks to plan their day, call plan_today; pass energy if they mention it.
+  If they swap a priority, call plan_today again rather than editing items one by one.
+- When the user says "wrap up" or "done for today", call wrap_up.
 - The user is in charge. If they say "I know, keep going", call override with keep_going_once.
 ```
 
@@ -630,7 +691,7 @@ Each phase is demoable on its own.
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
 | 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty |
 | 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits all four text tools (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
-| 5 | Task breakdown | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure |
+| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item); `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items; `GET /today` renders with token, 401 without |
 | 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
 | 7 | Stretch | `reality_check(claim)`; Cognito OAuth 2.1 |
 
@@ -640,7 +701,7 @@ flowchart LR
     P1 --> P3[3 · Translator<br/>+ Bedrock wrapper]
     P2 --> P4[4 · Guardrail<br/>crisis → rumination → hyperfocus]
     P3 --> P4
-    P3 --> P5[5 · Task breakdown]
+    P3 --> P5[5 · Task breakdown<br/>+ daily plan]
     P4 --> P6[6 · DynamoDB + CDK<br/>+ Lambda deploy]
     P5 --> P6
     P6 --> P7[7 · Stretch<br/>reality_check · OAuth]
