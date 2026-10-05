@@ -30,7 +30,7 @@ self-reinforcing loops.
 ### Out of scope (MVP)
 
 - Sycophancy `reality_check` (stretch goal, phase 7)
-- Multi-user OAuth account linking (designed for, built later)
+- Multi-user rollout beyond the demo account (account linking itself is in the MVP, phase 6)
 - Meeting transcript briefs, tone checking/rewriting of the user's own drafts
 - Workspace connectors that read Slack / Teams / mail on the user's behalf (post-hackathon;
   MVP input is user-supplied text only, via voice, paste, `POST /inbox`, or the Telegram bot)
@@ -49,7 +49,8 @@ self-reinforcing loops.
 | Server cannot initiate speech or push to the device | Checks run only when the user speaks. Results may include `suggest_reminder_minutes`; server instructions ask Alexa to set a native reminder. The only unprompted path is the optional Telegram bot (§5.7), opt-in and capped. |
 | Output is spoken, not read | Every tool result has a `speak` field: 1–2 short, literal sentences. Structured fields sit alongside for Alexa's reasoning. |
 | Server influences Alexa only via instructions, tool descriptions, and results; it never sees the final reply | Guardrails are best-effort. Observed behaviour is recorded in the friction log. |
-| Voice latency budget is tight | Non-LLM tools target < 1 s. Bedrock-backed tools time out at 5 s and fall back to the deterministic baseline. |
+| Alexa+ requires < 500 ms round-trip latency | Server time target < 300 ms on the Alexa path. LLM-backed tools answer from the deterministic baseline immediately and refine in the background (§4 "Fast first, refine later"). Only the Telegram webhook waits for Bedrock (5 s timeout). |
+| Alexa+ links accounts with OAuth 2.1 only | Cognito account linking (auth code + PKCE S256, refresh tokens) in the MVP; the server publishes Protected Resource Metadata (§3, §9). |
 
 ### Request lifecycle
 
@@ -65,8 +66,8 @@ sequenceDiagram
     participant D as DynamoDB
 
     U->>A: "What was I doing?"
-    A->>S: tools/call what_was_i_doing (Bearer token)
-    S->>S: token → user_id
+    A->>S: tools/call what_was_i_doing (Cognito access token)
+    S->>S: validate JWT → sub = user_id
     opt tool takes free user text
         S->>C: check(text)
         C-->>S: clear / crisis
@@ -74,13 +75,15 @@ sequenceDiagram
     S->>P: run tool
     P->>D: Query PK=USER#id
     D-->>P: items
-    opt language task (decode, decompose, split_step, brain_dump)
-        P->>B: Converse (5 s timeout)
-        B-->>P: JSON or timeout → baseline
-    end
-    P-->>S: structured result + speak
-    S-->>A: tool result
+    P-->>S: structured result + speak (baseline for language tasks)
+    S-->>A: tool result (< 500 ms round trip)
     A-->>U: speaks the "speak" text
+    opt language task (decode, decompose, split_step, brain_dump)
+        S-)S: async self-invoke (InvocationType=Event)
+        S->>B: Converse (5 s timeout)
+        B-->>S: refined JSON
+        S->>D: store refined result (refine: done)
+    end
     Note over S,U: Alexa path has no push — the server only answers when Alexa calls it.<br/>Nudges come back as suggest_reminder_minutes for Alexa to set a native reminder.<br/>The only unprompted path is the opt-in Telegram bot (§5.7).
 ```
 
@@ -90,9 +93,9 @@ sequenceDiagram
 |---|---|
 | License | Own permissive license (MIT or Apache-2.0; pick before first public push) |
 | LLM usage | Hybrid: deterministic baseline computed first, refined by Bedrock; baseline returned if Bedrock fails or times out |
-| Identity | MVP: one demo user, static bearer token (`AUTH_TOKEN`) maps to a fixed `user_id`. All data keyed by `user_id` so OAuth 2.1 (Cognito) drops in later without schema changes |
+| Identity | Alexa+ path: Cognito account linking (OAuth 2.1 auth code + PKCE S256, refresh tokens, static app client with Alexa's redirect URIs); the JWT `sub` is the `user_id`. MVP has one demo account. Static `AUTH_TOKEN` is accepted only when `ALLOW_STATIC_TOKEN=true` (local dev, tests, Inspector). Telegram identity comes from the chat link (§5.7); the iOS Shortcut uses a personal inbox token (§5.3) |
 | Rumination input | Alexa calls `log_topic` when the user raises a worry, driven by server instructions and tool description |
-| Crisis detection | Deterministic keyword/phrase list first, then Bedrock Guardrails `ApplyGuardrail`; a hit on either triggers the crisis path |
+| Crisis detection | Deterministic keyword/phrase list first, then Bedrock Guardrails `ApplyGuardrail` (250 ms budget, re-run async on timeout); a hit on either triggers the crisis path |
 | Hosting | AWS Lambda + Function URL, MCP in stateless HTTP mode with JSON responses; all state in DynamoDB |
 | Storage | One store interface; SQLite for local dev and tests, DynamoDB on AWS; selected by `STORE` env var |
 | Recall matching | Tiered: exact → alias → fuzzy → embedding (Titan Text Embeddings v2); first tier that clears its threshold wins |
@@ -111,6 +114,16 @@ sequenceDiagram
 - **Crisis precheck:** tools that accept free user text (`remember`, `decode`, `log_topic`,
   `decompose`, `brain_dump`) run the crisis check first. On a hit they return the crisis result (§6) and do
   nothing else.
+- **Fast first, refine later** (Alexa+ needs < 500 ms round trip): tools that use Bedrock
+  (`decode`, `decompose`, `split_step`, `brain_dump`) return their deterministic result at once
+  with `source: "baseline"` and `refine: "pending"`, then the Lambda invokes itself
+  asynchronously (`InvocationType=Event`) to run the Bedrock call (5 s timeout). The refined
+  result is stored on the item with `refine: "done"` (or `"failed"`, keeping the baseline). The
+  next ask ("what should I say?", `next_step`) reads the refined result, and a linked Telegram
+  card is edited in place when it lands. The Telegram webhook is not bound by 500 ms, so it runs
+  the refine synchronously and replies with the full card.
+- **Other budgets on the Alexa path:** embedding tier 200 ms (skipped for this call on timeout);
+  `ApplyGuardrail` 250 ms (§6).
 - **Errors:** returned as `{ "error": { "code": str, "message": str }, "speak": str }`.
   Common codes: `UNAUTHORIZED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `LLM_UNAVAILABLE` (only when no
   deterministic fallback exists), `CONFIRMATION_REQUIRED`.
@@ -257,7 +270,10 @@ Reading a long message aloud is the main friction, so these paths feed the same 
 | Telegram | Reading the full breakdown | Forward, share, or paste to the NeuroCare bot (§5.7); it replies with the triage card |
 | Email forward | Emails, one tap from any mail app | Forward to the NeuroCare address (§5.8, optional, phase 6b); sender kept automatically |
 
-`POST /inbox` is a plain HTTP route on the same server (not an MCP tool), same bearer token.
+`POST /inbox` is a plain HTTP route on the same server (not an MCP tool). It is authorized by a
+personal **inbox token**: the Telegram bot issues it with `/token` (shown once, stored hashed as
+`TOKEN#<hash>`), the user pastes it into the iOS Shortcut, and `/token revoke` or `delete_all`
+revokes it.
 Body: `{ text: str (≤ 4000), sender?: str, source?: str }`. Stores an `INBOX#` item (TTL 7 days).
 Returns `{ id }`. The crisis precheck runs when the item is decoded, not on ingest.
 
@@ -281,6 +297,7 @@ Returns
   sender_context_used: bool,
   sender_source: "param" | "channel" | "header" | "signature" | "asked" | null,
   source: "llm" | "baseline",
+  refine: "pending" | "done" | "failed",
   speak
 }
 ```
@@ -292,11 +309,14 @@ Pipeline (a fixed sequence of steps, not an open-ended agent loop):
    `temperature`, `reply_needed`, `priority`, one generic `likely_intent`, and `cues`.
 3. **Context gather (no LLM):** sender profile (`PERSON#`), open loops and commitments matching
    the sender or the message (tiered recall, §5.1) → `related`, and today's plan (`PLAN#<date>`).
-4. **Bedrock refine:** one call with the message, baseline, sender profile ("manager, blunt, not
-   angry"), related items, today's plan, and the user's register. The message is wrapped as
-   untrusted data (§6). Output is validated against a JSON schema. On timeout/invalid output →
-   return baseline with `source: "baseline"`.
-5. Store the result on the `INBOX#` item.
+4. **Return the baseline** (Alexa path): store it on the `INBOX#` item with `refine: "pending"`
+   and return it; `speak` uses only baseline fields.
+5. **Bedrock refine** (async on the Alexa path, synchronous for Telegram): one call with the
+   message, baseline, sender profile ("manager, blunt, not angry"), related items, today's plan,
+   and the user's register. The message is wrapped as untrusted data (§6). Output is validated
+   against a JSON schema and stored with `refine: "done"`. On timeout/invalid output the
+   baseline stays, with `refine: "failed"`. `summary`, `actions`, and `suggested_reply` come
+   from the refine; until then they are empty.
 
 ```mermaid
 flowchart TD
@@ -304,15 +324,17 @@ flowchart TD
     CR -- hit --> CRISIS[[Crisis result only]]
     CR -- clear --> BASE[Deterministic baseline<br/>phrase cues → temperature, priority,<br/>reply_needed, generic intent, cues]
     BASE --> CTX[Context gather, no LLM<br/>sender profile · related open loops<br/>· today's plan]
-    CTX --> LLM[Bedrock Converse<br/>message as untrusted data<br/>+ baseline + context + register]
+    CTX --> SB[(Store baseline on INBOX#<br/>refine: pending)]
+    SB --> RET([Return baseline + speak<br/>Alexa path, under 500 ms])
+    SB -. async self-invoke .-> LLM[Bedrock Converse<br/>message as untrusted data<br/>+ baseline + context + register]
     LLM --> OK{Valid JSON<br/>within 5 s?}
-    OK -- yes --> R1([Refined result<br/>source: llm])
-    OK -- no --> R2([Baseline result<br/>source: baseline])
-    R1 --> ST[(Store on INBOX# item)]
-    R2 --> ST
+    OK -- yes --> R1[(Store refined result<br/>refine: done)]
+    OK -- no --> R2[(Keep baseline<br/>refine: failed)]
+    R1 -.-> TGE([Edit Telegram card<br/>if linked])
 ```
 
-`speak` gives the most likely reading first, then urgency, then any related promise:
+`speak` (from the baseline and context, so it is ready in under 500 ms) gives the most likely
+reading first, then urgency, then any related promise:
 "Most likely Priya just wants a status update — she's usually this short. Not urgent. A one-line reply today is fine. You told her the deck would be ready Monday."
 
 Low-friction rules:
@@ -340,6 +362,12 @@ A tier-4 match is used only if it is unambiguous. When the user picks a sender a
 the sender is stored on the `INBOX#` item and `decode` re-runs with that context. The result
 carries `sender_source: "param" | "channel" | "header" | "signature" | "asked" | null`.
 
+#### `decode_result()`
+"What should I say?" / "What does she want?" right after a decode. Returns the stored result of
+the most recent decode (refined if the refine has landed) without calling Bedrock:
+`{ id, summary, actions, suggested_reply?, refine, speak }`. If `refine` is still `pending`,
+`speak` says "Still working on the details. Ask me again in a moment." and gives the baseline.
+
 #### `triage_inbox(limit=3)`
 "What needs me?" / "Anything urgent?" Decodes pending inbox items (at most 3 per call, to stay
 inside the latency budget; the rest are reported as `pending`), then ranks all decoded,
@@ -360,9 +388,13 @@ step; the plan is fixed later with `split_step` / `skip_step`. Stored as the use
 list, replacing any previous one (the old list is kept and marked inactive).
 Alexa calls it on overwhelm phrasing too ("I don't know where to start with my taxes"), not only
 on explicit "break this down" requests (see §10).
-Returns `{ task_id, steps: [{ n, text, minutes }], speak }`; `speak` reads only step 1.
-If Bedrock fails, returns `{ steps: [], fallback_hint, speak }` where `fallback_hint` asks Alexa to
-break the goal down itself and save it with `remember(kind=commitment)`.
+Returns `{ task_id, steps: [{ n, text, minutes }], refine, speak }`; `speak` reads only step 1.
+Fast first (§4): on the Alexa path the instant result is a single baseline step 1, "Spend 5
+minutes writing down what done looks like for <goal>", with `refine: "pending"`; the full list
+arrives in the background. `next_step` uses the refined list when it is ready, otherwise says
+"Still planning the rest. Finish this one first."
+If the refine fails, the task keeps the baseline step, and the next `next_step` returns
+`fallback_hint`, which asks Alexa to break the goal down itself and save it with `remember(kind=commitment)`.
 
 #### `next_step()`
 Returns only the next undone step of the active task: `{ n, text, minutes, remaining, speak }`.
@@ -374,8 +406,9 @@ If a work block is open for the step, it is closed; the next step opens a new bl
 
 #### `split_step()`
 "This one's too big." Replaces only the current step with 2–4 smaller steps (Bedrock, same
-validation; step 1 ≤ 5 minutes). Returns `{ steps: [...], remaining, speak }`; `speak` reads the
-new first step. On LLM failure returns `fallback_hint` like `decompose`.
+validation; step 1 ≤ 5 minutes). Returns `{ steps: [...], remaining, refine, speak }`; `speak` reads
+the new first step. Fast first (§4): the instant step is "Do just the first 5 minutes of <step>",
+replaced by the refined steps when they land. On refine failure the instant step stays.
 
 #### `skip_step()`
 "Not now." Moves the current step to the end of the list. Returns `{ skipped, next, remaining, speak }`.
@@ -460,11 +493,12 @@ Never more than `plan.max_priorities` items spoken, never a full list read aloud
 
 #### `brain_dump(text)`
 "Brain dump: renew passport, mom's birthday Sunday, fix the slides."
-Captures one or more items with no follow-up questions. Bedrock splits the text into items, tags
-each `work | personal | life | admin`, extracts `due_at` if mentioned, and sets a triage `bucket`
-(`must | should | could | wait`). On LLM failure the whole text is stored as one untagged item
-with `bucket: should`.
-Returns `{ items: [{ id, text, tag, bucket, due_at? }], source: "llm" | "baseline", speak }`.
+Captures one or more items with no follow-up questions. Fast first (§4): the instant baseline
+splits on commas, "and", and new lines into untagged items with `bucket: should`. The background
+refine (Bedrock) fixes the split, tags each `work | personal | life | admin`, extracts `due_at`
+if mentioned, and sets a triage `bucket` (`must | should | could | wait`). On refine failure
+the baseline items stay.
+Returns `{ items: [{ id, text, tag, bucket, due_at? }], source: "llm" | "baseline", refine, speak }`.
 `speak`: "Saved 3. Birthday marked for Sunday."
 
 #### `plan_today(energy=None)`
@@ -499,6 +533,10 @@ forwarding, and tapping. Both call the same pillar functions, so state is shared
 forwarded on Telegram shows up in "Alexa, what needs me?", and a plan made by voice updates the
 pinned Today message. It uses the Telegram Bot API directly, with no agent framework. Optional:
 everything still works with Alexa alone.
+
+#### `/token` (Telegram command)
+Issues a personal inbox token for the iOS Shortcut (`POST /inbox`, §5.3). Shown once, stored
+only as a hash. `/token revoke` deletes it.
 
 #### `telegram_link_code()` (MCP tool)
 "Alexa, link Telegram." Returns a 6-digit code valid for 10 minutes, and `speak` reads it out.
@@ -653,8 +691,12 @@ flowchart LR
 - Runs **before** any other logic in `remember`, `decode`, `log_topic`, `decompose`, `brain_dump`.
 - Step 1: deterministic phrase list (self-harm, suicide, "can't go on", etc.), case- and
   punctuation-insensitive. Always available, no network.
-- Step 2: Bedrock Guardrails `ApplyGuardrail` on the same text (self-harm/violence filters).
-  Failure of step 2 does not block step 1.
+- Step 2: Bedrock Guardrails `ApplyGuardrail` on the same text (self-harm/violence filters),
+  with a 250 ms budget on the Alexa path. Failure of step 2 does not block step 1.
+- **If step 2 times out**, the tool continues and step 2 re-runs asynchronously. An async hit
+  sets `STATE.crisis_flag_at`: the next tool call returns the crisis result before anything else,
+  and a linked Telegram chat gets the resources message right away. Any refine queued for that
+  text is cancelled and its stored text is deleted.
 - On a hit: return only
   `{ crisis: true, resources: [...], speak }` — no redirect, coaching, counting, or storage of the
   text. `speak`: calm, short, gives the resource ("You can call or text 988 any time to talk to someone right now.").
@@ -669,13 +711,16 @@ flowchart TD
     K -- no --> G{Bedrock ApplyGuardrail<br/>self-harm / violence}
     G -- intervened --> HIT
     G -- clear --> CONT([Continue normal tool logic])
-    G -- error / timeout --> CONT
+    G -- error --> CONT
+    G -- timeout 250 ms --> ASY[Continue now<br/>re-run async]
+    ASY --> CONT
+    ASY -. async hit .-> FLAG[Set crisis_flag_at<br/>next call returns crisis first<br/>+ Telegram resources]
     HIT[[Crisis path]] --> R([Return crisis: true + resources + calm speak])
     HIT --> F[(Record crisis flag only<br/>no text stored)]
     R -.->|overrides ignored| X[No redirect, coaching,<br/>counting, or storage]
 
     classDef crisis fill:#C62828,stroke:#8E0000,color:#FFFFFF
-    class HIT,R crisis
+    class HIT,R,FLAG crisis
 ```
 
 ### General
@@ -735,9 +780,9 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `MEM#` | fact / preference / commitment | `kind`, `text`, `subject`, `due_at`, `status`, `embedding` |
 | `PERSON#<name>` | person | `role`, `notes`, `aliases` |
 | `BLOCK#` | work block | `task`, `started_at`, `ended_at`, `summary` |
-| `TASK#` | task breakdown | `goal`, `steps`, `active`, `cursor` |
-| `INBOX#` | received message + triage | `text`, `sender`, `source`, `decoded_at`, `result` (decode output), `resolved_at`, `ttl` |
-| `ITEM#` | brain-dump item | `text`, `tag`, `bucket`, `due_at`, `status` |
+| `TASK#` | task breakdown | `goal`, `steps`, `active`, `cursor`, `refine`, `refined_at` |
+| `INBOX#` | received message + triage | `text`, `sender`, `source`, `decoded_at`, `result` (decode output), `refine`, `refined_at`, `resolved_at`, `ttl` |
+| `ITEM#` | brain-dump item | `text`, `tag`, `bucket`, `due_at`, `status`, `refine`, `refined_at` |
 | `PLAN#<date>` | daily plan | `priorities` (item ids), `energy`, `wrapped_at` |
 | `TOPIC#` | rumination topic | `text`, `embedding`, `ttl` |
 | `NEED#` | water/food/break log | `kind`, `ttl` |
@@ -745,17 +790,18 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `PUSH#` | bot-initiated message log | `kind`, `sent_at`, `ttl` (2 days) |
 | `STATE` | pointers | `open_block_id`, `active_task_id`, `crisis_flag_at`, `telegram_chat_id`, `pinned_message_id` |
 
-Two items live outside the user partition, because the caller knows only a chat or a code:
+Three items live outside the user partition, because the caller knows only a chat, a code, or a token:
 
 | PK / SK | Item | Attributes |
 |---|---|---|
 | `TG#<chat_id>` / `LINK` | Telegram chat → user | `user_id`, `linked_at` |
 | `LINKCODE#<code>` / `CODE` | pending link code | `user_id`, `ttl` (10 minutes) |
+| `TOKEN#<sha256>` / `INBOX` | personal inbox token (hash only) | `user_id`, `created_at` |
 
 - `embedding`: float32 vector stored as binary (1024 dims for Titan v2 at default size).
 - TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days; `PUSH#` after 2 days; `LINKCODE#` after
   10 minutes.
-- Access is always by `PK` (single user partition, or the two lookup items above); similarity is
+- Access is always by `PK` (single user partition, or the three lookup items above); similarity is
   computed in-process — per-user corpora are small. No vector database: at ~2,000 vectors × 1024 dims (~8 MB) a brute-force
   cosine scan is a few milliseconds with numpy; the cost is the paginated DynamoDB read, paid
   only when exact/alias/fuzzy recall all miss. Revisit only if a user exceeds ~5,000 vectors (§12).
@@ -782,6 +828,7 @@ erDiagram
     PLAN }o--o{ ITEM : priorities
     USER ||--o{ PUSH : "SK=PUSH#ulid"
     TGLINK |o--|| USER : user_id
+    INBOXTOKEN |o--|| USER : user_id
     STATE |o--o| BLOCK : open_block_id
     STATE |o--o| TASK : active_task_id
     MEM }o--o| PERSON : subject
@@ -792,15 +839,16 @@ erDiagram
     MEM { string kind string text string subject datetime due_at string status binary embedding }
     PERSON { string role string notes list aliases }
     BLOCK { string task datetime started_at datetime ended_at string summary }
-    TASK { string goal list steps bool active int cursor }
-    INBOX { string text string sender string source datetime decoded_at map result datetime resolved_at number ttl }
+    TASK { string goal list steps bool active int cursor string refine datetime refined_at }
+    INBOX { string text string sender string source datetime decoded_at map result string refine datetime refined_at datetime resolved_at number ttl }
     TOPIC { string text binary embedding number ttl }
     NEED { string kind number ttl }
     OVERRIDE { string token datetime active_until }
-    ITEM { string text string tag string bucket datetime due_at string status }
+    ITEM { string text string tag string bucket datetime due_at string status string refine datetime refined_at }
     PLAN { list priorities int energy datetime wrapped_at }
     PUSH { string kind datetime sent_at number ttl }
     TGLINK { string chat_id PK "PK=TG#chat_id" string user_id datetime linked_at }
+    INBOXTOKEN { string token_hash PK "PK=TOKEN#sha256" string user_id datetime created_at }
 ```
 
 ### SQLite (local)
@@ -820,16 +868,19 @@ flowchart LR
     U -->|text · buttons| TG[Telegram]
     U -->|forward email| SESN
     TG -->|webhook POST /telegram<br/>secret header| URL
-    A -->|MCP · Streamable HTTP<br/>Bearer token| URL[Lambda Function URL]
+    A -->|MCP · Streamable HTTP<br/>Cognito access token| URL[Lambda Function URL]
+    A -.->|account linking<br/>OAuth 2.1 + PKCE| COG
 
     subgraph AWS["AWS account · us-east-1"]
         URL --> TOOLS
         SCH[EventBridge Scheduler<br/>every 15 min] -->|invoke| SRV
+        COG[Cognito user pool<br/>hosted UI] -.->|JWKS| AUTH
+        SRV -.->|async self-invoke<br/>Bedrock refine| SRV
         SESN[SES inbound<br/>optional] -->|raw MIME| S3B[(S3<br/>1-day lifecycle)]
         S3B -->|object created| SRV
 
         subgraph SRV["MCP server · Lambda (Python, stateless)"]
-            TOOLS[Tool layer<br/>server.py] --> AUTH[auth<br/>token → user_id]
+            TOOLS[Tool layer<br/>server.py] --> AUTH[auth<br/>JWT → user_id]
             TOOLS --> SAFE[safety<br/>crisis precheck]
             TOOLS --> PIL[pillars<br/>memory · time · translator<br/>tasks · guardrail · plan]
             PIL --> LLMC[llm client]
@@ -855,7 +906,7 @@ flowchart LR
     classDef data fill:#3B48CC,stroke:#262F85,color:#FFFFFF
     classDef code fill:#ECEFF4,stroke:#7D8998,color:#1B1F24
     classDef ext fill:#DCEFFB,stroke:#147EBA,color:#0B3D5C
-    class URL,CW,SCH,SESN aws
+    class URL,CW,SCH,SESN,COG aws
     class S3B data
     class HAIKU,TITAN,GR bedrock
     class DDB,SQL data
@@ -869,7 +920,8 @@ Planned module layout (not yet created):
 src/alexa_mcp_server/
   server.py          MCPServer instance, instructions, tool registration, main()
   config.py          env settings
-  auth.py            bearer token → user_id
+  auth.py            Cognito JWT (JWKS cached; iss, client_id, exp, scope) → user_id; static token
+                     only with ALLOW_STATIC_TOKEN; PRM route /.well-known/oauth-protected-resource
   store/             base.py (interface), sqlite.py, dynamo.py
   llm/               bedrock.py, fake.py (tests)
   pillars/           memory.py, time.py, translator.py, tasks.py, guardrail.py, plan.py
@@ -878,9 +930,11 @@ src/alexa_mcp_server/
   channels/schedule.py  scheduled bot messages (cap, quiet hours)
   channels/email.py  SES inbound: parse forwarded email → INBOX# (optional)
   safety/crisis.py   phrase list + ApplyGuardrail
-  lambda_handler.py  ASGI → Lambda adapter
+  refine.py          async self-invoke + Bedrock refine jobs (decode, decompose, split_step, brain_dump)
+  lambda_handler.py  ASGI → Lambda adapter; routes async refine and scheduler events
 profile_seed.yaml
-infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail), Guardrail,
+infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail,
+                     lambda:InvokeFunction on itself), Guardrail, Cognito user pool + app client + hosted domain,
                      EventBridge Scheduler rule, Secrets Manager secrets (Telegram bot token, webhook secret),
                      optional SES receipt rule + S3 bucket for email forwarding
 ```
@@ -895,7 +949,8 @@ brew install graphviz
 uv run --no-project --with diagrams python docs/diagrams/aws_architecture.py
 ```
 
-Environment variables: `STORE`, `TABLE_NAME`, `SQLITE_PATH`, `AUTH_TOKEN`, `DEMO_USER_ID`,
+Environment variables: `STORE`, `TABLE_NAME`, `SQLITE_PATH`, `AUTH_TOKEN`, `ALLOW_STATIC_TOKEN`, `DEMO_USER_ID`,
+`COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `PUBLIC_BASE_URL`,
 `BEDROCK_MODEL_ID`, `BEDROCK_EMBED_MODEL_ID`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (both from SSM / Secrets Manager on AWS),
 `INBOUND_EMAIL_DOMAIN`, `INBOUND_EMAIL_BUCKET` (optional),
@@ -914,6 +969,7 @@ You are connected to a personal cognitive support server for this user.
 - When the user asks what a message means, call decode. If they refer to a message they just
   sent or forwarded, call decode with no message.
 - When decode returns needs_work or reply_needed, make at most one offer: a reminder or a breakdown.
+- After a decode, when the user asks what to say or what the sender wants, call decode_result.
 - When the user sounds overwhelmed by a goal ("I don't know where to start", "this is too much"),
   call decompose with the goal. Do not ask clarifying questions first.
 - When the user says "done", "next", "too big", or "not now" during a task, call done_step,
@@ -937,14 +993,14 @@ Each phase is demoable on its own.
 
 | # | Phase | Done when |
 |---|---|---|
-| 1 | Store interface + SQLite, auth, memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
+| 1 | Store interface + SQLite, auth (static dev token), memory tools, profile + seed | All memory tools pass tests; `what_was_i_doing` returns seeded context in Inspector |
 | 2 | Sense of time | `check_in` level boundaries tested at 59/60/89/90/119/120 min and after end-of-day; `now_context` leave-by correct |
-| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty; triage fields present (`related` resolved from seeded commitments, `cues` from baseline); a message containing injected instructions yields a normal result with no side effects; sender resolution tiers 1–4 tested (header line, unambiguous signature, ambiguous signature → none); `triage_inbox` orders by priority → reply_by → age and decodes at most 3 per call |
-| 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits `remember`, `decode`, `log_topic`, and `decompose` (tested); 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
-| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure. `brain_dump` splits multi-item text (baseline stores one item) and is short-circuited by the crisis precheck; `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
-| 6 | DynamoDB store + CDK + Lambda | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; Inspector connects to Function URL `/mcp` with token |
+| 3 | Translator + Bedrock wrapper | Baseline-only path tested with fake LLM failure; schema-validated LLM path tested with fake LLM; one live Bedrock smoke test; fast-first: `decode` returns the baseline without waiting on the LLM (fake LLM with a 3 s delay still returns in < 300 ms), the async refine stores `refine: done` / `failed`; embedding tier enabled (recall and rumination tested with `FakeEmbedder`, null embeddings backfilled); `POST /inbox` → `decode()` with no message decodes newest item, `NOT_FOUND` when empty; triage fields present (`related` resolved from seeded commitments, `cues` from baseline); a message containing injected instructions yields a normal result with no side effects; sender resolution tiers 1–4 tested (header line, unambiguous signature, ambiguous signature → none); `triage_inbox` orders by priority → reply_by → age and decodes at most 3 per call |
+| 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits `remember`, `decode`, `log_topic`, and `decompose` (tested); `ApplyGuardrail` timeout → async re-run, and an async hit makes the next call return crisis first; 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
+| 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure; fast-first baselines for `decompose`, `split_step`, and `brain_dump` returned without waiting on the LLM, then replaced by the refine. `brain_dump` splits multi-item text (baseline stores one item) and is short-circuited by the crisis precheck; `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
+| 6 | DynamoDB store + CDK + Lambda + account linking | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; PRM served at `/.well-known/oauth-protected-resource`; 401 carries `WWW-Authenticate` with `resource_metadata`; expired/wrong-client JWTs rejected; Alexa+ account linking completes against Cognito (PKCE S256, refresh token issued); Alexa-path tools measured < 500 ms round trip on a warm Lambda |
 | 6b | Telegram companion | Link code flow (expiry, single use); webhook rejects a missing/wrong secret header; unlinked chat rejected; forwarded text → triage card with buttons; buttons call `remember` / `brain_dump` / feedback; pinned Today message edited on plan change; push cap and quiet hours honored (clock fixture); local long-polling dev mode works. Optional email forwarding: Gmail/Outlook/Apple Mail forward fixtures parse the original sender; non-allowlisted or SPF/DKIM-failing mail dropped; raw object deleted after parse; card sent to linked Telegram chat |
-| 7 | Stretch | `reality_check(claim)`; Cognito OAuth 2.1 |
+| 7 | Stretch | `reality_check(claim)` |
 
 ```mermaid
 flowchart LR
@@ -953,10 +1009,10 @@ flowchart LR
     P2 --> P4[4 · Guardrail<br/>crisis → rumination → hyperfocus]
     P3 --> P4
     P3 --> P5[5 · Task breakdown<br/>+ daily plan]
-    P4 --> P6[6 · DynamoDB + CDK<br/>+ Lambda deploy]
+    P4 --> P6[6 · DynamoDB + CDK<br/>+ Lambda deploy<br/>+ account linking]
     P5 --> P6
     P6 --> P6B[6b · Telegram companion]
-    P6B --> P7[7 · Stretch<br/>reality_check · OAuth]
+    P6B --> P7[7 · Stretch<br/>reality_check]
 
     classDef mvp fill:#DCEFFB,stroke:#147EBA,color:#0B3D5C
     classDef aws fill:#FF9900,stroke:#B36B00,color:#000000
@@ -983,10 +1039,11 @@ flowchart LR
 |---|---|
 | Alexa+ may weakly follow server instructions (e.g. not calling `log_topic` unprompted) | Strong tool descriptions; demo phrasing that triggers tools; document in friction log |
 | Alexa+ may not read MCP resources | Profile also exposed as `get_profile` tool |
-| Alexa+ auth / account linking model for MCP unverified | Bearer token for MVP; store keyed by `user_id` for later OAuth |
-| Bedrock latency vs voice timeouts | 5 s timeout, deterministic fallback, Haiku-class model |
+| Alexa+ may look for authorization-server metadata at `/.well-known/oauth-authorization-server`, while Cognito serves `openid-configuration` | Verify at phase 6; fallback: Lambda serves that path, proxying Cognito's metadata |
+| 500 ms round-trip limit | Fast first, refine later (§4); Bedrock never on the Alexa request path; embedding 200 ms and ApplyGuardrail 250 ms budgets |
+| Baseline answers are less insightful than refined ones | `speak` leans on sender context and phrase cues; the full refined result reaches Telegram within seconds and the next voice ask |
 | Exact v2 `MCPServer` option for stateless HTTP / JSON response mode | Verify against current SDK docs at start of phase 6 |
-| Lambda cold starts | Keep dependencies small; provisioned concurrency only if needed for demo |
+| Lambda cold starts break the 500 ms budget | Keep dependencies small; provisioned concurrency = 1 during demo and judging windows |
 | Per-user corpus outgrows in-process similarity (> ~5,000 vectors) | First drop Titan v2 to 512 or 256 dims and store vectors under their own SK prefix; only then consider a managed vector store (S3 Vectors, OpenSearch Serverless) |
 | False positives in rumination/hyperfocus | Configurable thresholds, `lower_sensitivity` override, facts-not-instructions wording |
 | Scope creep into a second agent or broad inbox access | Alexa+ is the only agent; connectors only forward user-chosen messages to `/inbox` |
