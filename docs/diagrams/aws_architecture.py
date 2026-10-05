@@ -13,12 +13,14 @@ from pathlib import Path
 from diagrams import Cluster, Diagram, Edge
 from diagrams.aws.compute import Lambda
 from diagrams.aws.database import DynamodbTable
+from diagrams.aws.engagement import SimpleEmailServiceSes
 from diagrams.aws.integration import EventbridgeScheduler
 from diagrams.aws.general import User
 from diagrams.aws.iot import IotAlexaEcho, IotAlexaVoiceService
 from diagrams.aws.management import Cloudformation, CloudwatchLogs
 from diagrams.aws.ml import Bedrock
 from diagrams.aws.security import KMS, IAMRole, SecretsManager
+from diagrams.aws.storage import SimpleStorageServiceS3
 from diagrams.generic.database import SQL
 from diagrams.onprem.client import Client
 from diagrams.programming.language import Python
@@ -67,6 +69,10 @@ with Diagram(
             role = IAMRole("Execution role\n(least privilege)")
             scheduler = EventbridgeScheduler("EventBridge Scheduler\n(every 15 min)")
 
+        with Cluster("Email forwarding (optional)", graph_attr={"bgcolor": "#FFF9E6", "style": "dashed"}):
+            ses = SimpleEmailServiceSes("SES inbound\n(allowlist + SPF/DKIM)")
+            raw = SimpleStorageServiceS3("S3 raw MIME\n(1-day lifecycle)")
+
         with Cluster("Data", graph_attr={"bgcolor": "#EEF3FB"}):
             table = DynamodbTable("cognitive-substrate\n(PK=USER#id)")
             kms = KMS("KMS\n(encryption at rest)")
@@ -92,6 +98,9 @@ with Diagram(
     telegram >> Edge(label="webhook POST /telegram\nsecret header", color=TELEGRAM_BLUE) >> mcp
     mcp >> Edge(label="Bot API sendMessage", color=TELEGRAM_BLUE, style="dashed") >> telegram
     scheduler >> Edge(label="invoke", color=AWS_ORANGE) >> mcp
+    user >> Edge(label="forwards email", style="dashed", color=GREY) >> ses
+    ses >> Edge(style="dashed", color=GREY) >> raw
+    raw >> Edge(label="object created", style="dashed", color=GREY) >> mcp
     secrets - Edge(style="dotted", color=GREY) - mcp
     cfn >> Edge(label="deploys", style="dashed", color=GREY) >> mcp
     mcp >> Edge(style="dotted", color=GREY) >> logs
