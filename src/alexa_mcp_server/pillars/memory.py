@@ -402,6 +402,7 @@ def seed(store: Store, user_id: str, data: dict[str, Any], now: datetime) -> dic
                 "text": mem["text"],
                 "subject": mem.get("subject"),
                 "due_at": utc_iso(now + timedelta(minutes=due)) if due is not None else None,
+                "travel_minutes": mem.get("travel_minutes"),
                 "status": "open" if kind == "commitment" else None,
                 "embedding": None,
                 "created_at": created,
