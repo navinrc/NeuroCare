@@ -182,10 +182,12 @@ def remember(
         }
     store.put(pk, sk, doc)
 
+    result: Result = {"id": sk, "kind": kind, "deduplicated": existing is not None}
     speak = f"Got it. I'll remember {said}."
     if doc.get("due_at"):
+        result["due_at"] = local(doc["due_at"], tz)
         speak += f" Due {speech.when(datetime.fromisoformat(doc['due_at']).astimezone(tz), now.astimezone(tz))}."
-    return {"id": sk, "kind": kind, "deduplicated": existing is not None, "speak": speak}
+    return {**result, "speak": speak}
 
 
 def recall(store: Store, user_id: str, query: str, now: datetime, kind: Kind | None = None, limit: int = 5) -> Result:

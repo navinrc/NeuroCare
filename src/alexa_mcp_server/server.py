@@ -72,7 +72,7 @@ def remember(
     text: Annotated[str, Field(description="What to remember, in the user's words", max_length=2000)],
     kind: Annotated[Kind, Field(description="commitment = something to do; it becomes an open loop")] = "fact",
     subject: Annotated[str | None, Field(description="Person or project it's about; for person, their name")] = None,
-    due_at: Annotated[str | None, Field(description="ISO 8601 due time; commitments only")] = None,
+    due_at: Annotated[str | None, Field(description="Local ISO 8601; bare date = 9 AM. Commitments only")] = None,
 ) -> dict[str, Any]:
     """Store something the user wants kept: a fact, a person, a preference, or a commitment."""
     return memory.remember(get_store(), _user(), text, clock(), kind=kind, subject=subject, due_at=due_at)

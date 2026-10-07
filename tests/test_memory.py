@@ -51,8 +51,15 @@ def test_remember_person_and_recall_by_alias(seeded):
 def test_commitment_due_at_uses_profile_timezone(seeded):
     result = memory.remember(seeded, USER, "Call the bank", NOW, kind="commitment", due_at="2026-10-06T09:30")
     assert result["speak"].endswith("Due tomorrow at 9:30 AM.")
+    assert result["due_at"] == "2026-10-06T09:30:00-04:00"
     loops = memory.open_loops(seeded, USER, NOW)["loops"]
     assert {"id": result["id"], "text": "Call the bank", "due_at": "2026-10-06T09:30:00-04:00"} in loops
+
+
+def test_commitment_date_only_due_at_defaults_to_morning(seeded):
+    result = memory.remember(seeded, USER, "Call the bank", NOW, kind="commitment", due_at="2026-10-06")
+    assert result["due_at"] == "2026-10-06T09:00:00-04:00"
+    assert result["speak"].endswith("Due tomorrow at 9 AM.")
 
 
 def test_recall_empty_and_kind_filter(seeded):
