@@ -1,0 +1,45 @@
+# Demo seed — synthetic data only. Load with: uv run alexa-mcp-seed --reset
+# Times are relative to when the seed runs, so the demo always looks current.
+
+profile:
+  display_name: Sam
+  timezone: America/New_York
+  style:
+    register: plain
+  time:
+    end_of_day: "18:00"
+
+people:
+  Priya:
+    role: manager
+    notes: Tends to be blunt in writing; short messages are normal, not anger.
+    aliases: [P, my boss]
+  Jordan:
+    role: teammate
+    notes: Owns the Q3 deck design.
+    aliases: [Jordy]
+
+memories:
+  - text: The quarterly report is due Friday
+    kind: fact
+    subject: quarterly report
+    ago_minutes: 2880
+  - text: I prefer written instructions over calls
+    kind: preference
+    ago_minutes: 1440
+  - text: Send Priya the Q3 deck
+    kind: commitment
+    subject: Priya
+    ago_minutes: 1500
+    due_in_minutes: 1440
+  - text: Reply to Jordan about the venue
+    kind: commitment
+    subject: Jordan
+    ago_minutes: 300
+  - text: Book the dentist
+    kind: commitment
+    ago_minutes: 4000
+
+blocks:
+  - task: the budget email
+    started_minutes_ago: 40
