@@ -3,6 +3,7 @@
 Exposes tools over the Streamable HTTP transport at ``http://<host>:<port>/mcp``.
 """
 
+import hmac
 import json
 import logging
 from collections.abc import Callable
@@ -12,10 +13,14 @@ from typing import Annotated, Any, Literal
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from alexa_mcp_server import auth
+from alexa_mcp_server import auth, semantic  # noqa: F401 — semantic registers the "embed" refine job
 from alexa_mcp_server.config import load_settings
-from alexa_mcp_server.pillars import memory, sense_of_time
+from alexa_mcp_server.llm import LLM, Embedder, make_embedder, make_llm
+from alexa_mcp_server.pillars import inbox, memory, sense_of_time, translator
+from alexa_mcp_server.refine import Deps, Refiner, ThreadRefiner
 from alexa_mcp_server.store import Store, make_store
 
 INSTRUCTIONS = """\
@@ -30,6 +35,11 @@ You are connected to a personal cognitive support server for this user.
 - When the user starts or finishes a piece of work, call start_block or end_block.
 - When the user asks how long they've been at something, call check_in.
 - When a tool result includes suggest_reminder_minutes, offer to set an Alexa reminder for that time.
+- When the user asks what a message means, call decode. If they refer to a message they just
+  sent or forwarded, call decode with no message.
+- When decode returns needs_work or reply_needed, make at most one offer: a reminder or a breakdown.
+- After a decode, when the user asks what to say or what the sender wants, call decode_result.
+- When the user asks "what needs me?" or "anything urgent?", call triage_inbox.
 - Speak the `speak` field from tool results in plain, literal words. Do not add idioms.
 - Prefer accuracy over agreement. If the user's claim conflicts with what memory shows, say so gently.
 """
@@ -45,6 +55,9 @@ mcp = MCPServer(
 )
 
 _store: Store | None = None
+_llm: LLM | None = None
+_embedder: Embedder | None = None
+_refiner: Refiner | None = None
 clock: Callable[[], datetime] = lambda: datetime.now(UTC)  # noqa: E731 — tests replace it
 
 
@@ -53,6 +66,28 @@ def get_store() -> Store:
     if _store is None:
         _store = make_store(settings)
     return _store
+
+
+def get_embedder() -> Embedder | None:
+    global _embedder
+    if _embedder is None:
+        _embedder = make_embedder(settings)
+    return _embedder
+
+
+def deps() -> Deps:
+    global _llm
+    if _llm is None:
+        _llm = make_llm(settings)
+    return Deps(store=get_store(), llm=_llm, embedder=get_embedder(), clock=lambda: clock())
+
+
+def get_refiner() -> Refiner:
+    """Background refine jobs (spec §4). The Lambda self-invoke runner replaces this in phase 6."""
+    global _refiner
+    if _refiner is None:
+        _refiner = ThreadRefiner(deps())
+    return _refiner
 
 
 def _user() -> str:
@@ -79,7 +114,9 @@ def remember(
     due_at: Annotated[str | None, Field(description="Local ISO 8601; bare date = 9 AM. Commitments only")] = None,
 ) -> dict[str, Any]:
     """Store something the user wants kept: a fact, a person, a preference, or a commitment."""
-    return memory.remember(get_store(), _user(), text, clock(), kind=kind, subject=subject, due_at=due_at)
+    return memory.remember(
+        get_store(), _user(), text, clock(), kind=kind, subject=subject, due_at=due_at, refiner=get_refiner()
+    )
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -89,7 +126,7 @@ def recall(
     limit: Annotated[int, Field(ge=1, le=20)] = 5,
 ) -> dict[str, Any]:
     """Find what the user told you before. An empty `matches` list means nothing was saved about it."""
-    return memory.recall(get_store(), _user(), query, clock(), kind=kind, limit=limit)
+    return memory.recall(get_store(), _user(), query, clock(), kind=kind, limit=limit, embedder=get_embedder())
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -107,7 +144,7 @@ def open_loops(limit: Annotated[int, Field(ge=1, le=20)] = 5) -> dict[str, Any]:
 @mcp.tool(annotations=WRITE)
 def close_loop(text: Annotated[str, Field(description="The finished item, in the user's words")]) -> dict[str, Any]:
     """Mark an open loop done. If several match, nothing is closed and `candidates` lists them; ask which one."""
-    return memory.close_loop(get_store(), _user(), text, clock())
+    return memory.close_loop(get_store(), _user(), text, clock(), embedder=get_embedder())
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -163,6 +200,68 @@ def end_block(
 def check_in() -> dict[str, Any]:
     """How long the current block has run, as a level: none, gentle, nudge, or hard."""
     return sense_of_time.check_in(get_store(), _user(), clock())
+
+
+@mcp.tool(annotations=WRITE)
+def decode(
+    message: Annotated[
+        str | None,
+        Field(description="The message the user received. Omit to read the newest forwarded one", max_length=4000),
+    ] = None,
+    sender: Annotated[str | None, Field(description="Who sent it, if the user said", max_length=200)] = None,
+) -> dict[str, Any]:
+    """Explain what a message most likely means, how urgent it is, and what it asks for."""
+    return translator.decode(get_store(), _user(), clock(), message=message, sender=sender, refiner=get_refiner())
+
+
+@mcp.tool(annotations=READ_ONLY)
+def decode_result() -> dict[str, Any]:
+    """The details of the last decoded message: summary, what they want, and a suggested reply."""
+    return translator.decode_result(get_store(), _user())
+
+
+@mcp.tool(annotations=WRITE)
+def triage_inbox(limit: Annotated[int, Field(ge=1, le=10)] = 3) -> dict[str, Any]:
+    """What needs the user: open messages ranked by priority, then reply-by time, then age."""
+    return translator.triage_inbox(get_store(), _user(), clock(), limit=limit, refiner=get_refiner())
+
+
+def _inbox_user(request: Request) -> str | None:
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    if not token:
+        return None
+    user_id = inbox.user_for_inbox_token(get_store(), token)
+    if user_id is None and settings.allow_static_token and settings.auth_token:
+        if hmac.compare_digest(token.encode(), settings.auth_token.encode()):
+            user_id = settings.demo_user_id
+    return user_id
+
+
+@mcp.custom_route("/inbox", methods=["POST"])
+async def post_inbox(request: Request) -> JSONResponse:
+    """Forward a message for a later decode (iOS Shortcut). Auth: personal inbox token."""
+    user_id = _inbox_user(request)
+    if user_id is None:
+        return JSONResponse({"error": {"code": "UNAUTHORIZED", "message": "valid inbox token required"}}, 401)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": {"code": "INVALID_ARGUMENT", "message": "JSON object body required"}}, 400)
+    text, sender, source = body.get("text"), body.get("sender"), body.get("source") or "shortcut"
+    problems = []
+    if not isinstance(text, str) or not text.strip() or len(text) > translator.MAX_MESSAGE:
+        problems.append(f"text must be 1 to {translator.MAX_MESSAGE} characters")
+    if sender is not None and (not isinstance(sender, str) or len(sender) > 200):
+        problems.append("sender must be a string of at most 200 characters")
+    if not isinstance(source, str) or len(source) > 40:
+        problems.append("source must be a short string")
+    if problems:
+        return JSONResponse({"error": {"code": "INVALID_ARGUMENT", "message": "; ".join(problems)}}, 400)
+    item = translator.add_inbox_item(get_store(), user_id, text.strip(), clock(), sender=sender, source=source)
+    return JSONResponse({"id": item["sk"]}, 201)
 
 
 @mcp.resource("profile://me", name="profile", mime_type="application/json")

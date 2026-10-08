@@ -1,7 +1,8 @@
 """Tiered text matching for recall and close_loop (spec §3 "Recall matching").
 
-Tiers run in order and the first tier with any hit wins: exact → alias → fuzzy. The embedding
-tier is skipped until phase 3 (no Bedrock client yet).
+Tiers run in order and the first tier with any hit wins: exact → alias → fuzzy → embedding. The
+embedding tier is supplied by the caller (``semantic``) because it needs the store and an embedder;
+see ``alexa_mcp_server.semantic``.
 """
 
 import re
@@ -66,6 +67,7 @@ def tiered_match(
     items: Sequence[Item],
     people: Mapping[str, Iterable[str]] = {},
     text_of: Callable[[Item], str] = lambda item: item.get("text", ""),
+    semantic: Callable[[str, Sequence[Item]], list[Match]] | None = None,
 ) -> tuple[Resolution | None, list[Match]]:
     """Match ``query`` against ``items``; ``people`` maps a canonical name to its aliases.
 
@@ -103,4 +105,8 @@ def tiered_match(
     fuzzy = sorted((m for m in scored if m.score >= FUZZY_THRESHOLD), key=lambda m: m.score, reverse=True)
     if fuzzy:
         return "fuzzy", fuzzy
+    if semantic is not None:
+        close = semantic(query, newest_first)
+        if close:
+            return "embedding", close
     return None, []

@@ -2,7 +2,8 @@
 
     uv run python scripts/smoke.py scripts/smoke/phase2.yaml [--url URL] [--token TOKEN]
 
-The YAML file is a list of steps: ``{tool: name, args: {...}}`` or ``{list_tools: true}``.
+The YAML file is a list of steps: ``{tool: name, args: {...}}``, ``{list_tools: true}``, or
+``{inbox: {text, sender?}}`` (POST /inbox with the same bearer token).
 Output is Markdown, so it can be pasted into docs/verify/.
 """
 
@@ -12,6 +13,8 @@ import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -26,6 +29,13 @@ async def run(steps: list[dict], url: str, token: str | None) -> int:
     transport = streamable_http_client(url, http_client=create_mcp_http_client(headers=headers))
     async with Client(transport) as client:
         for n, step in enumerate(steps, 1):
+            if "inbox" in step:
+                status, reply = post_inbox(url, token, step["inbox"])
+                ok = status == step.get("status", 201)
+                failures += not ok
+                print(f"### {n}. `POST /inbox {json.dumps(step['inbox'])}` → HTTP {status} {'✅' if ok else '❌'}\n")
+                print("```json\n" + json.dumps(reply, indent=2) + "\n```\n")
+                continue
             if step.get("list_tools"):
                 tools = sorted(t.name for t in (await client.list_tools()).tools)
                 print(f"### {n}. tools/list\n\n{len(tools)} tools: {', '.join(tools)}\n")
@@ -51,6 +61,19 @@ async def run(steps: list[dict], url: str, token: str | None) -> int:
             print(f"### {n}. `{name}({arg_text})` — {ms:.0f} ms {'✅' if ok else '❌'}\n")
             print("```json\n" + json.dumps(body, indent=2, ensure_ascii=False) + "\n```\n")
     return failures
+
+
+def post_inbox(mcp_url: str, token: str | None, body: dict) -> tuple[int, dict]:
+    url = mcp_url.rsplit("/mcp", 1)[0] + "/inbox"
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST")
+    request.add_header("Content-Type", "application/json")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read() or b"{}")
 
 
 def main() -> None:
