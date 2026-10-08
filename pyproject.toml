@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "boto3>=1.43.109",
     "mcp[cli]>=2.2.0",
     "pyyaml>=6.0.3",
 ]
@@ -15,6 +16,7 @@ dependencies = [
 [project.scripts]
 alexa-mcp-server = "alexa_mcp_server:main"
 alexa-mcp-seed = "alexa_mcp_server.seed:main"
+alexa-mcp-inbox-token = "alexa_mcp_server.tokens:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
@@ -22,6 +24,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "moto>=5.2.3",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.9",
@@ -30,6 +33,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["live: calls real AWS services; run with BEDROCK_LIVE=1"]
 
 [tool.ruff]
 line-length = 120

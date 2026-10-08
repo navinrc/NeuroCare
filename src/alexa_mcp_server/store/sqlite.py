@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,9 @@ def _row_to_item(pk: str, sk: str, doc: str) -> Item:
 
 
 class SQLiteStore(Store):
-    def __init__(self, path: str = ":memory:"):
+    def __init__(self, path: str = ":memory:", clock: Callable[[], float] = time.time):
+        """``clock`` gives epoch seconds for TTL checks; tests pass their fixed clock."""
+        self._clock = clock
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -39,7 +42,7 @@ class SQLiteStore(Store):
         with self._lock:
             row = self._conn.execute(
                 "SELECT doc FROM items WHERE pk = ? AND sk = ? AND (ttl IS NULL OR ttl > ?)",
-                (pk, sk, int(time.time())),
+                (pk, sk, int(self._clock())),
             ).fetchone()
         return _row_to_item(pk, sk, row[0]) if row else None
 
@@ -57,7 +60,7 @@ class SQLiteStore(Store):
             rows = self._conn.execute(
                 "SELECT sk, doc FROM items WHERE pk = ? AND substr(sk, 1, ?) = ? AND (ttl IS NULL OR ttl > ?)"
                 " ORDER BY sk",
-                (pk, len(prefix), prefix, int(time.time())),
+                (pk, len(prefix), prefix, int(self._clock())),
             ).fetchall()
         return [_row_to_item(pk, sk, doc) for sk, doc in rows]
 

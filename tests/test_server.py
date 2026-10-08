@@ -62,6 +62,24 @@ async def test_time_tools_over_mcp(mcp_store):
         assert (await client.call_tool("end_block", {})).structured_content["error"]["code"] == "NOT_FOUND"
 
 
+async def test_translator_tools_over_mcp(mcp_store):
+    memory.seed(mcp_store, "demo", SEED, server.clock())
+    async with Client(mcp) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert {"decode", "decode_result", "triage_inbox"} <= names
+        decoded = await client.call_tool("decode", {"message": "Can you send the deck today? Thanks, Priya"})
+        assert decoded.structured_content["sender_source"] == "signature"
+        assert decoded.structured_content["refine"] == "failed"  # no LLM configured in tests
+        detail = await client.call_tool("decode_result", {})
+        assert detail.structured_content["speak"].startswith("I couldn't get more detail")
+        triage = await client.call_tool("triage_inbox", {})
+        assert triage.structured_content["items"][0]["sender"] == "Priya"
+        empty = await client.call_tool("decode", {})
+        assert empty.structured_content["error"]["code"] == "NOT_FOUND"
+        too_long = await client.call_tool("decode", {"message": "x" * 4001})
+        assert too_long.is_error
+
+
 async def test_remember_then_recall_over_mcp(mcp_store):
     async with Client(mcp) as client:
         await client.call_tool("remember", {"text": "Jordan owns the venue booking", "subject": "Jordan"})

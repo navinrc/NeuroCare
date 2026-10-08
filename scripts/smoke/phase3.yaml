@@ -1,0 +1,20 @@
+# Phase 3 live proof: translator over HTTP (LLM_PROVIDER=off → baseline path, refine "failed").
+- list_tools: true
+- tool: decode
+  expect: {error_code: NOT_FOUND}
+- tool: decode
+  args: {message: "Per my last email, can you send the Q3 deck by today? Thanks, Priya"}
+  expect: {priority: must, temperature: tense, sender_source: signature}
+- tool: decode_result
+- inbox: {text: "Hi! Could you review the venue contract by Thursday?", sender: Jordy}
+- inbox: {text: "From: Jordan <jordan@example.com>\n\nFYI the parking garage is closed Monday."}
+- inbox: {text: ""}
+  status: 400
+- tool: decode
+  expect: {sender_source: header}
+- tool: triage_inbox
+- tool: close_loop
+  args: {text: the message from Priya}
+- tool: triage_inbox
+- tool: recall
+  args: {query: Q3 deck}
