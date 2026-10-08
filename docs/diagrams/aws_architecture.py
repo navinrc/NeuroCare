@@ -14,8 +14,8 @@ from diagrams import Cluster, Diagram, Edge
 from diagrams.aws.compute import Lambda
 from diagrams.aws.database import DynamodbTable
 from diagrams.aws.engagement import SimpleEmailServiceSes
-from diagrams.aws.integration import EventbridgeScheduler
 from diagrams.aws.general import User
+from diagrams.aws.integration import EventbridgeScheduler
 from diagrams.aws.iot import IotAlexaEcho, IotAlexaVoiceService
 from diagrams.aws.management import Cloudformation, CloudwatchLogs
 from diagrams.aws.ml import Bedrock

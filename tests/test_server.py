@@ -45,6 +45,23 @@ async def test_every_memory_tool_returns_speak(mcp_store):
             assert result.structured_content["speak"], name
 
 
+async def test_time_tools_over_mcp(mcp_store):
+    memory.seed(mcp_store, "demo", SEED, server.clock())
+    calls = [
+        ("now_context", {}),
+        ("check_in", {}),
+        ("start_block", {"task": "the slides"}),
+        ("end_block", {"summary": "first draft"}),
+    ]
+    async with Client(mcp) as client:
+        assert {name for name, _ in calls} <= {tool.name for tool in (await client.list_tools()).tools}
+        for name, args in calls:
+            result = await client.call_tool(name, args)
+            assert not result.is_error, name
+            assert result.structured_content["speak"], name
+        assert (await client.call_tool("end_block", {})).structured_content["error"]["code"] == "NOT_FOUND"
+
+
 async def test_remember_then_recall_over_mcp(mcp_store):
     async with Client(mcp) as client:
         await client.call_tool("remember", {"text": "Jordan owns the venue booking", "subject": "Jordan"})

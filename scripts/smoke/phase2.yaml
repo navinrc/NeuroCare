@@ -1,0 +1,34 @@
+# Phase 2 live proof. Run right after `alexa-mcp-seed --reset` (seed times are relative).
+- list_tools: true
+- tool: now_context
+- tool: check_in
+  expect: {level: none}
+- tool: set_preference
+  args: {key: time.checkin_thresholds.gentle, value: 15}
+- tool: set_preference
+  args: {key: time.checkin_thresholds.nudge, value: 30}
+- tool: set_preference
+  args: {key: time.checkin_thresholds.hard, value: 45}
+- tool: check_in
+  expect: {level: nudge}
+- tool: set_preference
+  args: {key: time.checkin_thresholds.hard, value: 120}
+- tool: set_preference
+  args: {key: time.checkin_thresholds.nudge, value: 90}
+- tool: set_preference
+  args: {key: time.checkin_thresholds.gentle, value: 60}
+- tool: start_block
+  args: {task: the slides}
+- tool: start_block
+  args: {task: The Slides}
+  expect: {already_open: true}
+- tool: check_in
+  expect: {level: none, task: the slides}
+- tool: end_block
+  args: {summary: outline done}
+  expect: {task: the slides}
+- tool: end_block
+  expect: {error_code: NOT_FOUND}
+- tool: check_in
+  expect: {level: none, task: null}
+- tool: what_was_i_doing

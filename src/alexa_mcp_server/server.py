@@ -15,7 +15,7 @@ from pydantic import Field
 
 from alexa_mcp_server import auth
 from alexa_mcp_server.config import load_settings
-from alexa_mcp_server.pillars import memory
+from alexa_mcp_server.pillars import memory, sense_of_time
 from alexa_mcp_server.store import Store, make_store
 
 INSTRUCTIONS = """\
@@ -26,6 +26,10 @@ You are connected to a personal cognitive support server for this user.
   kind=commitment for something they promised or need to do.
 - When the user asks what they told you, or what they know about something, call recall.
 - When the user says something is done or handled, call close_loop with their words.
+- When the user asks the time, what's next, or how long they have, call now_context.
+- When the user starts or finishes a piece of work, call start_block or end_block.
+- When the user asks how long they've been at something, call check_in.
+- When a tool result includes suggest_reminder_minutes, offer to set an Alexa reminder for that time.
 - Speak the `speak` field from tool results in plain, literal words. Do not add idioms.
 - Prefer accuracy over agreement. If the user's claim conflicts with what memory shows, say so gently.
 """
@@ -131,6 +135,34 @@ def export_all() -> dict[str, Any]:
 def delete_all(confirm: bool = False) -> dict[str, Any]:
     """Delete everything stored for the user. Irreversible: call with confirm=true only after the user says yes."""
     return memory.delete_all(get_store(), _user(), confirm=confirm)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def now_context() -> dict[str, Any]:
+    """The time, energy zone, current work block, and next commitment with a leave-by time when travel is known."""
+    return sense_of_time.now_context(get_store(), _user(), clock())
+
+
+@mcp.tool(annotations=WRITE)
+def start_block(
+    task: Annotated[str, Field(description="The work being started, in the user's words", max_length=200)],
+) -> dict[str, Any]:
+    """Start timing a piece of work. A different open block is closed and reported in `auto_closed`."""
+    return sense_of_time.start_block(get_store(), _user(), task, clock())
+
+
+@mcp.tool(annotations=WRITE)
+def end_block(
+    summary: Annotated[str | None, Field(description="What got done, if the user said", max_length=500)] = None,
+) -> dict[str, Any]:
+    """Stop timing the current piece of work."""
+    return sense_of_time.end_block(get_store(), _user(), clock(), summary=summary)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def check_in() -> dict[str, Any]:
+    """How long the current block has run, as a level: none, gentle, nudge, or hard."""
+    return sense_of_time.check_in(get_store(), _user(), clock())
 
 
 @mcp.resource("profile://me", name="profile", mime_type="application/json")
