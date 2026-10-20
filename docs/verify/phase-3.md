@@ -35,7 +35,7 @@ uv run ruff check . && uv run ruff format --check .
 ## 2. Live Bedrock smoke test (needs your AWS login)
 
 ```bash
-aws sso login --profile neurocare-admin
+aws login --profile neurocare-admin
 BEDROCK_LIVE=1 AWS_PROFILE=neurocare-admin uv run pytest -m live -s
 # expect: 2 passed. Prints the refined decode and two cosine scores (related > unrelated).
 ```

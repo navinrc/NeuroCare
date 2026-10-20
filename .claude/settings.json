@@ -13,6 +13,10 @@
       "Bash(git diff:*)",
       "Bash(git log:*)"
     ],
+    "ask": [
+      "Bash(*--profile neurocare-admin*)",
+      "Bash(*AWS_PROFILE=neurocare-admin*)"
+    ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
