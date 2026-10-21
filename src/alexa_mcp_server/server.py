@@ -10,6 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
+import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -93,6 +94,9 @@ def get_refiner() -> Refiner:
 def _user() -> str:
     return auth.current_user_id(settings)
 
+
+DECODE_RESULT_WAIT = 8.0
+"""Seconds decode_result holds the reply for Bedrock instead of answering "still working"."""
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
@@ -215,9 +219,12 @@ def decode(
 
 
 @mcp.tool(annotations=READ_ONLY)
-def decode_result() -> dict[str, Any]:
+async def decode_result() -> dict[str, Any]:
     """The details of the last decoded message: summary, what they want, and a suggested reply."""
-    return translator.decode_result(get_store(), _user())
+    user_id = _user()  # resolve auth on the request task, before the worker thread
+    return await anyio.to_thread.run_sync(
+        lambda: translator.decode_result(get_store(), user_id, wait=DECODE_RESULT_WAIT)
+    )
 
 
 @mcp.tool(annotations=WRITE)

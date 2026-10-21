@@ -7,6 +7,7 @@ store on ``INBOX#`` with ``refine: pending`` → return. The LLM refine runs as 
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
+from time import monotonic, sleep
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,7 @@ TRIAGE_DECODE_LIMIT = 3
 REMIND_BEFORE = 30
 """Minutes before ``reply_by`` that the suggested reminder fires."""
 RELATED_SCORE = 0.6
+RESULT_POLL = 0.25  # seconds between store reads while decode_result waits on a refine
 """Share of an open loop's words that must appear in the message for it to count as related."""
 WORKDAY_END = time(17, 0)
 """Clock time used for "today" / "by Friday" deadlines."""
@@ -515,11 +517,17 @@ def decode(
     return _decode_item(store, user_id, item, now, sender, voice=False, refiner=refiner)
 
 
-def decode_result(store: Store, user_id: str) -> Result:
-    decoded = [i for i in store.query(user_pk(user_id), "INBOX#") if i.get("decoded_at")]
+def decode_result(store: Store, user_id: str, wait: float = 0.0) -> Result:
+    """``wait``: seconds to hold the answer while the refine is still pending (voice can't re-ask)."""
+    pk = user_pk(user_id)
+    decoded = [i for i in store.query(pk, "INBOX#") if i.get("decoded_at")]
     if not decoded:
         return error("NOT_FOUND", "nothing decoded yet", "I haven't read a message with you yet.")
     item = max(decoded, key=lambda i: (i["decoded_at"], i["sk"]))
+    deadline = monotonic() + wait
+    while (item.get("refine") or item["result"].get("refine")) == "pending" and monotonic() < deadline:
+        sleep(RESULT_POLL)
+        item = store.get(pk, item["sk"]) or item
     result = item["result"]
     refine = item.get("refine") or result.get("refine")
     out: Result = {
