@@ -96,7 +96,7 @@ def _user() -> str:
 
 
 DECODE_RESULT_WAIT = 8.0
-"""Seconds decode_result holds the reply for Bedrock instead of answering "still working"."""
+"""Seconds decode / decode_result hold the reply for Bedrock instead of the baseline / "still working"."""
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
@@ -207,7 +207,7 @@ def check_in() -> dict[str, Any]:
 
 
 @mcp.tool(annotations=WRITE)
-def decode(
+async def decode(
     message: Annotated[
         str | None,
         Field(description="The message the user received. Omit to read the newest forwarded one", max_length=4000),
@@ -215,7 +215,12 @@ def decode(
     sender: Annotated[str | None, Field(description="Who sent it, if the user said", max_length=200)] = None,
 ) -> dict[str, Any]:
     """Explain what a message most likely means, how urgent it is, and what it asks for."""
-    return translator.decode(get_store(), _user(), clock(), message=message, sender=sender, refiner=get_refiner())
+    user_id, now = _user(), clock()
+    return await anyio.to_thread.run_sync(
+        lambda: translator.decode(
+            get_store(), user_id, now, message=message, sender=sender, refiner=get_refiner(), wait=DECODE_RESULT_WAIT
+        )
+    )
 
 
 @mcp.tool(annotations=READ_ONLY)
