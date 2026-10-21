@@ -44,3 +44,16 @@ decisions made without asking. Newest phase at the bottom. Status: **fixed** · 
 | 19 | fixed | Credentials from `aws login` need `botocore[crt]`; without it boto3 raises `MissingDependencyException`. Dependency is now `boto3[crt]`. |
 | 20 | fixed | **Live decode refine always failed.** Haiku 4.5 read the prose schema "likely_intents (1-3 of {reading, confidence})" as one object (`{"reading": 0.7, "confidence": 0.3}`); validation rejected it, so `refine: failed` and only the baseline was ever served. The system prompt now gives the exact JSON shape. Live test passed 3/3 after. Haiku latency ~3 s, inside the 5 s `LLM_TIMEOUT`. Follow-up idea: Converse `toolConfig` with a forced tool whose `inputSchema` is `DecodeRefine.model_json_schema()` would enforce shape server-side. |
 | 21 | decision | Identity Center dropped from `docs/aws-setup.md`: it needs AWS Organizations, which moves a free-plan account to the paid plan and expires credits. Now an IAM user + `aws login` (short-lived, no keys on disk); `neurocare-agent` is an IAM role assumed from `neurocare-admin`. |
+
+## Phase 4 — guardrail (2026-10-21)
+
+| # | Status | Finding |
+|---|---|---|
+| 16 | fixed | Rumination with `FakeEmbedder` now tested (`test_rumination_by_embedding_cosine`). |
+| 22 | fixed | **Async crisis re-check left the stored text in place.** `crisis.recheck` read the list of linked items *before* calling the guard; the tool attached its item while the guard was running, and the recheck then deleted from the stale empty list and overwrote the record. Now re-reads after the guard returns. Caught by `test_guard_timeout_rechecks_async_and_flags_next_call`. |
+| 23 | open | A smaller window remains: an `attach` landing between that re-read and the hit marker write is lost (no conditional write in SQLite here). Close with a DynamoDB conditional update in phase 6. |
+| 24 | open | Bedrock Guardrails content filters have no self-harm category (Hate, Insults, Sexual, Violence, Misconduct, Prompt attack). Spec §6 says "self-harm/violence filters"; use a **denied topic** for self-harm plus the Violence filter. Setup in `phase-4.md` step 5. |
+| 25 | open | `speak` wording: `log_topic` echoes the topic verbatim ("I've noted that worried about the presentation tomorrow is on your mind"), and `remember` capitalisation ("I'll remember This deadline…") is the same open item from phase 3. |
+| 26 | decision | `keep_going_once` / `snooze_15m` speak says "check-in" but also quiets rumination prompts. Kept short for voice. |
+| 27 | open | Spec §11 lists `decompose` under phase 4 acceptance; the tool is phase 5. Its precheck (and `brain_dump`'s) lands there. |
+| 28 | needs you | Check the helpline numbers in `safety/crisis.py` (US/CA 988, GB 116 123, AU 13 11 14, IN 14416 Tele-MANAS) before the demo. |

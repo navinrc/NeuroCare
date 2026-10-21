@@ -64,3 +64,21 @@ class FakeEmbedder:
             base = [b + n for b, n in zip(base, self._vector("noise:" + key, 0.1), strict=True)]
         norm = math.sqrt(sum(v * v for v in base))
         return [v / norm for v in base]
+
+
+class FakeGuard:
+    """Scripted ``ApplyGuardrail``: flags texts containing any of ``flag``; optional delay or failure."""
+
+    def __init__(self, *flag: str, delay: float = 0.0, fail: bool = False):
+        self.flag = [f.lower() for f in flag]
+        self.delay = delay
+        self.fail = fail
+        self.calls: list[str] = []
+
+    def intervenes(self, text: str) -> bool:
+        self.calls.append(text)
+        if self.delay:
+            time.sleep(self.delay)
+        if self.fail:
+            raise LLMError("guardrail down")
+        return any(f in text.lower() for f in self.flag)

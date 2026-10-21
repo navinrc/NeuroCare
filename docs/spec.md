@@ -93,7 +93,7 @@ sequenceDiagram
 |---|---|
 | License | Own permissive license (MIT or Apache-2.0; pick before first public push) |
 | LLM usage | Hybrid: deterministic baseline computed first, refined by Bedrock; baseline returned if Bedrock fails or times out |
-| Identity | Alexa+ path: Cognito account linking (OAuth 2.1 auth code + PKCE S256, refresh tokens, static app client with Alexa's redirect URIs); the JWT `sub` is the `user_id`. MVP has one demo account. Static `AUTH_TOKEN` is accepted only when `ALLOW_STATIC_TOKEN=true` (local dev, tests, Inspector). Telegram identity comes from the chat link (§5.7); the iOS Shortcut uses a personal inbox token (§5.3) |
+| Identity | Alexa+ path: Cognito account linking (OAuth 2.1 auth code + PKCE S256, refresh tokens, static app client with Alexa's redirect URIs); the JWT `sub` is the `user_id`. MVP has one demo account. Static `AUTH_TOKEN` is accepted only when `ALLOW_STATIC_TOKEN=true` (local dev, tests, Inspector). Telegram identity comes from the chat link (§5.7); the share-sheet shortcut (iOS or Android) uses a personal inbox token (§5.3) |
 | Rumination input | Alexa calls `log_topic` when the user raises a worry, driven by server instructions and tool description |
 | Crisis detection | Deterministic keyword/phrase list first, then Bedrock Guardrails `ApplyGuardrail` (250 ms budget, re-run async on timeout); a hit on either triggers the crisis path |
 | Hosting | AWS Lambda + Function URL, MCP in stateless HTTP mode with JSON responses; all state in DynamoDB |
@@ -266,13 +266,13 @@ Reading a long message aloud is the main friction, so these paths feed the same 
 |---|---|---|
 | Speak it | 1–2 sentences | "What does Priya mean by 'let's circle back'?" → `decode(message=…)` |
 | Type or paste | Longer text | Alexa app / alexa.com text chat → same `decode(message=…)` call |
-| Forward it | Long emails, threads | iOS Share Sheet shortcut (or similar) posts to `POST /inbox`; user then says "decode the message I just sent" → `decode()` |
+| Forward it | Long emails, threads | Share-sheet shortcut (iOS Shortcuts; Android HTTP Shortcuts) posts to `POST /inbox`; user then says "decode the message I just sent" → `decode()` |
 | Telegram | Reading the full breakdown | Forward, share, or paste to the NeuroCare bot (§5.7); it replies with the triage card |
 | Email forward | Emails, one tap from any mail app | Forward to the NeuroCare address (§5.8, optional, phase 6b); sender kept automatically |
 
 `POST /inbox` is a plain HTTP route on the same server (not an MCP tool). It is authorized by a
 personal **inbox token**: the Telegram bot issues it with `/token` (shown once, stored hashed as
-`TOKEN#<hash>`), the user pastes it into the iOS Shortcut, and `/token revoke` or `delete_all`
+`TOKEN#<hash>`), the user pastes it into the share-sheet shortcut, and `/token revoke` or `delete_all`
 revokes it.
 Body: `{ text: str (≤ 4000), sender?: str, source?: str }`. Stores an `INBOX#` item (TTL 7 days).
 Returns `{ id }`. The crisis precheck runs when the item is decoded, not on ingest.
@@ -535,7 +535,7 @@ pinned Today message. It uses the Telegram Bot API directly, with no agent frame
 everything still works with Alexa alone.
 
 #### `/token` (Telegram command)
-Issues a personal inbox token for the iOS Shortcut (`POST /inbox`, §5.3). Shown once, stored
+Issues a personal inbox token for the iOS or Android share-sheet shortcut (`POST /inbox`, §5.3). Shown once, stored
 only as a hash. `/token revoke` deletes it.
 
 #### `telegram_link_code()` (MCP tool)
@@ -1039,6 +1039,7 @@ flowchart LR
 |---|---|
 | Alexa+ may weakly follow server instructions (e.g. not calling `log_topic` unprompted) | Strong tool descriptions; demo phrasing that triggers tools; document in friction log |
 | Alexa+ may not read MCP resources | Profile also exposed as `get_profile` tool |
+| alexa.com typed chat may not call MCP add-ons (Amazon's toolkit docs cover voice and visual on Alexa devices only; music and smart home are reported missing on the web app), which would break the "type or paste" input path (§5) | Verify at phase 6 by pasting a message into alexa.com and confirming `decode` is called; fallbacks: typed chat in the Alexa app; share-sheet shortcut (iOS Shortcuts; Android HTTP Shortcuts) → `POST /inbox`; Telegram (§5.7) as the platform-neutral path |
 | Alexa+ may look for authorization-server metadata at `/.well-known/oauth-authorization-server`, while Cognito serves `openid-configuration` | Verify at phase 6; fallback: Lambda serves that path, proxying Cognito's metadata |
 | 500 ms round-trip limit | Fast first, refine later (§4); Bedrock never on the Alexa request path; embedding 200 ms and ApplyGuardrail 250 ms budgets |
 | Baseline answers are less insightful than refined ones | `speak` leans on sender context and phrase cues; the full refined result reaches Telegram within seconds and the next voice ask |

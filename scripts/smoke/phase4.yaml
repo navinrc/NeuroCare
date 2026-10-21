@@ -1,0 +1,40 @@
+# Phase 4 live proof: guardrail over HTTP (phrase list only; no Bedrock guardrail configured).
+- list_tools: true
+- tool: remember
+  args: {text: "I can't go on like this"}
+  expect: {crisis: true}
+- tool: decode
+  args: {message: "Honestly I want to die, this week is too much"}
+  expect: {crisis: true}
+- tool: log_topic
+  args: {topic: "thinking about suicide"}
+  expect: {crisis: true}
+- tool: export_all
+- tool: log_topic
+  args: {topic: "the presentation tomorrow"}
+  expect: {detected: false, count: 1}
+- tool: log_topic
+  args: {topic: "worried about the presentation tomorrow"}
+  expect: {detected: false, count: 2}
+- tool: log_topic
+  args: {topic: "the presentation tomorrow"}
+  expect: {detected: true, count: 3}
+- tool: override
+  args: {token: keep_going_once}
+- tool: log_topic
+  args: {topic: "the presentation tomorrow"}
+  expect: {detected: false, suppressed: true}
+- tool: log_topic
+  args: {topic: "the presentation tomorrow"}
+  expect: {detected: true}
+- tool: override
+  args: {token: snooze_15m}
+- tool: log_topic
+  args: {topic: "I want to end it all"}
+  expect: {crisis: true}
+- tool: check_hyperfocus
+- tool: log_need
+  args: {kind: water}
+- tool: check_hyperfocus
+- tool: override
+  args: {token: lower_sensitivity}
