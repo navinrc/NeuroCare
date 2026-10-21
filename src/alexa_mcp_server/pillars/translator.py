@@ -7,6 +7,7 @@ store on ``INBOX#`` with ``refine: pending`` → return. The LLM refine runs as 
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
+from time import monotonic, sleep
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,7 @@ TRIAGE_DECODE_LIMIT = 3
 REMIND_BEFORE = 30
 """Minutes before ``reply_by`` that the suggested reminder fires."""
 RELATED_SCORE = 0.6
+RESULT_POLL = 0.25  # seconds between store reads while decode_result waits on a refine
 """Share of an open loop's words that must appear in the message for it to count as related."""
 WORKDAY_END = time(17, 0)
 """Clock time used for "today" / "by Friday" deadlines."""
@@ -463,21 +465,21 @@ def _decode_item(
         result["suggest_reminder_minutes"] = max(5, remind)
 
     # speak: most likely reading → sender context → urgency → related promise → at most one offer.
-    parts = [f"Most likely {reading}."]
+    head = [f"Most likely {reading}."]
     if sender.person and sender.person.get("role"):
-        parts.append(f"{sender.person['name']} is your {sender.person['role']}.")
-    parts.append(_urgency(base.priority, base.reply_by, base.reply_needed, now_local))
+        head.append(f"{sender.person['name']} is your {sender.person['role']}.")
+    tail = [_urgency(base.priority, base.reply_by, base.reply_needed, now_local)]
     if related:
-        parts.append(f"Related: you have {speech.second_person(related[0]['text'])} open.")
+        tail.append(f"Related: you have {speech.second_person(related[0]['text'])} open.")
     if base.reply_by:
-        parts.append("Want a reminder before then?")
+        tail.append("Want a reminder before then?")
     elif base.needs_work:
-        parts.append("Want me to break that into steps?")
+        tail.append("Want me to break that into steps?")
     elif voice and sender.source is None:
-        parts.append("Who's it from?")
+        tail.append("Who's it from?")
     elif sender.name and not sender.person:
-        parts.append(f"I don't know {sender.name} yet. Tell me who they are if you like.")
-    result["speak"] = " ".join(parts)
+        tail.append(f"I don't know {sender.name} yet. Tell me who they are if you like.")
+    result["speak"] = " ".join(head + tail)
 
     doc = {
         **item,
@@ -485,6 +487,7 @@ def _decode_item(
         "decoded_at": utc_iso(now),
         "result": result,
         "headline": headline,
+        "speak_tail": " ".join(tail),
         "refine": "pending",
     }
     store.put(pk, item["sk"], doc, ttl=item.get("ttl") or _ttl(now))
@@ -503,23 +506,50 @@ def decode(
     message: str | None = None,
     sender: str | None = None,
     refiner: Refiner | None = None,
+    wait: float = 0.0,
 ) -> Result:
+    """``wait``: seconds to hold the answer for the refine, so voice speaks the model's summary."""
     if message is not None and message.strip():
         if len(message) > MAX_MESSAGE:
             return error("INVALID_ARGUMENT", f"message is over {MAX_MESSAGE} characters", "That message is too long.")
         item = add_inbox_item(store, user_id, message.strip(), now, source="voice")
-        return _decode_item(store, user_id, item, now, sender, voice=True, refiner=refiner)
-    item = _newest_undecoded(store, user_id)
-    if item is None:
-        return error("NOT_FOUND", "no undecoded inbox item", "I don't have a new message from you to read.")
-    return _decode_item(store, user_id, item, now, sender, voice=False, refiner=refiner)
+        result = _decode_item(store, user_id, item, now, sender, voice=True, refiner=refiner)
+    else:
+        item = _newest_undecoded(store, user_id)
+        if item is None:
+            return error("NOT_FOUND", "no undecoded inbox item", "I don't have a new message from you to read.")
+        result = _decode_item(store, user_id, item, now, sender, voice=False, refiner=refiner)
+    return _await_refine(store, user_id, result, wait) if refiner and wait > 0 else result
 
 
-def decode_result(store: Store, user_id: str) -> Result:
-    decoded = [i for i in store.query(user_pk(user_id), "INBOX#") if i.get("decoded_at")]
+def _await_refine(store: Store, user_id: str, result: Result, wait: float) -> Result:
+    """Poll for the refine; when done, speak the model's summary ahead of urgency and the offer."""
+    if result.get("refine") != "pending":
+        return result
+    pk = user_pk(user_id)
+    deadline = monotonic() + wait
+    item = store.get(pk, result["id"])
+    while item and item.get("refine") == "pending" and monotonic() < deadline:
+        sleep(RESULT_POLL)
+        item = store.get(pk, result["id"])
+    if not item or item.get("refine") != "done":
+        return result
+    refined = item["result"]
+    speak = " ".join(p for p in (refined["summary"], item.get("speak_tail", "")) if p)
+    return {**refined, "speak": speak}
+
+
+def decode_result(store: Store, user_id: str, wait: float = 0.0) -> Result:
+    """``wait``: seconds to hold the answer while the refine is still pending (voice can't re-ask)."""
+    pk = user_pk(user_id)
+    decoded = [i for i in store.query(pk, "INBOX#") if i.get("decoded_at")]
     if not decoded:
         return error("NOT_FOUND", "nothing decoded yet", "I haven't read a message with you yet.")
     item = max(decoded, key=lambda i: (i["decoded_at"], i["sk"]))
+    deadline = monotonic() + wait
+    while (item.get("refine") or item["result"].get("refine")) == "pending" and monotonic() < deadline:
+        sleep(RESULT_POLL)
+        item = store.get(pk, item["sk"]) or item
     result = item["result"]
     refine = item.get("refine") or result.get("refine")
     out: Result = {

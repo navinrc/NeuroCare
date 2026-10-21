@@ -189,6 +189,41 @@ def test_fast_first_returns_before_slow_llm(seeded):
     assert translator.decode_result(seeded, USER)["refine"] == "done"
 
 
+def test_decode_result_waits_for_refine(seeded):
+    refiner = ThreadRefiner(deps_for(seeded, FakeLLM(REFINED, delay=0.5)), workers=1)
+    translator.decode(seeded, USER, NOW, message=PRIYA_MSG, refiner=refiner)
+    detail = translator.decode_result(seeded, USER, wait=5)
+    assert detail["refine"] == "done"
+    assert not detail["speak"].startswith("Still working")
+
+
+def test_decode_result_wait_gives_up(seeded):
+    refiner = ThreadRefiner(deps_for(seeded, FakeLLM(REFINED, delay=3)), workers=1)
+    translator.decode(seeded, USER, NOW, message=PRIYA_MSG, refiner=refiner)
+    started = time.perf_counter()
+    detail = translator.decode_result(seeded, USER, wait=0.5)
+    assert time.perf_counter() - started < 1.5
+    assert detail["refine"] == "pending"
+    refiner.wait(timeout=10)
+
+
+def test_decode_waits_and_speaks_refined_summary(seeded):
+    refiner = ThreadRefiner(deps_for(seeded, FakeLLM(REFINED, delay=0.5)), workers=1)
+    result = translator.decode(seeded, USER, NOW, message=PRIYA_MSG, refiner=refiner, wait=5)
+    assert result["refine"] == "done" and result["source"] == "llm"
+    assert result["speak"].startswith(REFINED["summary"])
+    assert result["speak"].endswith("Want a reminder before then?")
+
+
+def test_decode_wait_gives_up_with_baseline(seeded):
+    refiner = ThreadRefiner(deps_for(seeded, FakeLLM(REFINED, delay=3)), workers=1)
+    started = time.perf_counter()
+    result = translator.decode(seeded, USER, NOW, message=PRIYA_MSG, refiner=refiner, wait=0.5)
+    assert time.perf_counter() - started < 1.5
+    assert result["refine"] == "pending" and result["speak"].startswith("Most likely Priya")
+    refiner.wait(timeout=10)
+
+
 def test_fast_first_async_failure(seeded):
     refiner = ThreadRefiner(deps_for(seeded, FakeLLM(LLMError("bedrock down"), delay=0.2)))
     result = translator.decode(seeded, USER, NOW, message=PRIYA_MSG, refiner=refiner)
