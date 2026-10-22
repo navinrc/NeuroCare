@@ -11,7 +11,8 @@ Checks phase 4 of `docs/spec.md` §11: guardrail. Covers the crisis precheck, ru
 - An override suppresses the prompt.
 - Crisis ignores overrides.
 
-Branch `feat/phase-4-guardrail`. Takes about 20 minutes, plus 10 for the optional Bedrock Guardrails step.
+Branch `feat/phase-4-guardrail` (PR #10). Takes about 20 minutes, plus 10 for the live Bedrock step (5).
+Step 4.5 checks FINDINGS #17 on `fix/remember-due-in-minutes`, which is stacked on this branch.
 
 > The seed uses times relative to when it is loaded. **Re-seed (step 2) just before the Inspector steps.**
 
@@ -28,7 +29,7 @@ uv sync
 ## 1. Automated checks (acceptance)
 
 ```bash
-uv run pytest -q                       # expect: 180 passed, 5 skipped (the live Bedrock tests)
+uv run pytest -q                       # expect: 180 passed, 5 skipped (186 on fix/remember-due-in-minutes)
 # live (optional): 5 passed. Prints guardrail latency and Titan cosines.
 BEDROCK_LIVE=1 AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=7dnkm5nfui1e BEDROCK_GUARDRAIL_VERSION=1 \
   uv run pytest -m live -s
@@ -100,7 +101,7 @@ Connect as in phase 2: Streamable HTTP, `http://127.0.0.1:8000/mcp`, header `Aut
 | l | `log_topic` topic=`the presentation tomorrow` | `detected: true` again (the once-override was used up), a different `redirect` |
 | m | `log_topic` topic=`the dentist bill` | `count: 1`: an unrelated worry doesn't count |
 | n | `override` token=`lower_sensitivity` | `key: guardrail.rumination_threshold`, `old_value: 3`, `new_value: 4`. `get_profile` shows 4. Set it back: `set_preference` key=`guardrail.rumination_threshold` value=`3` |
-| o | `override` token=`stop_forever` | Rejected by the schema (enum): the Inspector shows a validation error |
+| o | `override`: open the `token` dropdown | Only the 4 tokens are offered; `stop_forever` can't be picked (schema enum). To send it anyway: `uv run python scripts/smoke.py <yaml with "- tool: override / args: {token: stop_forever}"> --token devtoken` gives the error "Input should be 'snooze_15m', 'keep_going_once', 'pause_for_session' or 'lower_sensitivity'" |
 
 ### 4.3 Hyperfocus, needs, and crisis vs override (seed block "the budget email" ≈ 40 min)
 
@@ -128,27 +129,55 @@ sqlite3 .data/neurocare.sqlite3 \
 | w | `now_context` (any tool except `ping`) | Crisis result instead of the time |
 | x | `now_context` again | Normal result: the flag is delivered once |
 
-## 5. Optional: live Bedrock Guardrails (needs your AWS login)
+### 4.5 `remember(due_in_minutes)` (FINDINGS #17, branch `fix/remember-due-in-minutes`)
 
-Bedrock content filters have no self-harm category, so the self-harm check is a **denied topic**.
+Stop the server, `git checkout fix/remember-due-in-minutes`, re-seed (step 2), restart (step 3), reconnect.
+**List Tools**: `remember` now shows `due_in_minutes` (1–43200).
 
-Already created by CLI (FINDINGS #31): id `7dnkm5nfui1e`, version 1. Steps 1–4 are for reference; skip to 5.
+| # | Tool + arguments | Expected |
+|---|---|---|
+| y1 | `now_context` | Note the local time T (profile `America/New_York`, not your laptop's IST) |
+| y2 | `remember` text=`Call the bank` kind=`commitment` due_in_minutes=`30` | `due_at` = T + 30 min with a `-04:00` offset; speak ends "Due …" |
+| y3 | `open_loops` | "Call the bank" listed with that `due_at` |
+| y4 | `remember` text=`Call the bank` kind=`commitment` due_at=`2026-10-30T09:00` due_in_minutes=`30` | `INVALID_ARGUMENT` "pass due_at or due_in_minutes, not both" |
+| y5 | `remember` text=`Sky is blue` due_in_minutes=`30` (kind fact) | `INVALID_ARGUMENT` "due_at is only for commitments" |
+| y6 | `remember` text=`Call the bank` kind=`commitment` due_in_minutes=`50000` | Schema validation error (max 43200) |
 
-1. Bedrock console → Guardrails → **Create guardrail** `neurocare-crisis`, us-east-1.
-2. **Denied topics**: add `Self-harm` with definition "Statements about wanting to hurt or kill
-   oneself, suicide, or not wanting to be alive." Add 3 sample phrases.
-3. **Content filters**: Violence, input strength **High**. Skip the output filters (only input is checked).
-4. Blocked message: anything (not used). **Create**, then **Create version** and note the id and version.
-5. Run:
-   ```bash
-   aws login --profile neurocare-admin
-   LLM_PROVIDER=bedrock AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=7dnkm5nfui1e BEDROCK_GUARDRAIL_VERSION=1 \
-     ALLOW_STATIC_TOKEN=true AUTH_TOKEN=devtoken uv run alexa-mcp-server
-   ```
-6. `remember` text=`Lately I feel like there's no point in being here at all`. It isn't on the phrase list, so
-   the guard must catch it: crisis result now, **or** a normal save followed by crisis on the next
-   tool call if the guard took > 250 ms (expected from a laptop: FINDINGS #30) (the saved memory is deleted; check with `export_all`).
-7. `remember` text=`Bring snacks to the offsite`: normal save, still there after a few seconds.
+## 5. Live Bedrock (needs `aws login --profile neurocare-admin`)
+
+Guardrail `neurocare-crisis` already exists (FINDINGS #31): id `7dnkm5nfui1e`, version 1, us-east-1.
+Denied topic `Self-harm` + Violence input filter High. Check it in the console under Bedrock → Guardrails.
+
+### 5.1 Live tests
+
+```bash
+BEDROCK_LIVE=1 AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=7dnkm5nfui1e BEDROCK_GUARDRAIL_VERSION=1 \
+  uv run pytest -m live -s
+```
+
+Expect **5 passed**, and in the output:
+- `ApplyGuardrail: cold … ms, warm … ms (budget 250 ms)`. From a laptop warm is ~400 ms (FINDINGS #30).
+- `async hit, flagged next call: True` (or `immediate crisis` if the guard beat 250 ms).
+- `Titan cosines: [0.48, 0.44, 0.64] min 0.4` then `[(1, False), (2, False), (3, True)]`: semantic rumination
+  detects on the 3rd (FINDINGS #29).
+
+### 5.2 Over the server
+
+```bash
+uv run alexa-mcp-seed --reset
+LLM_PROVIDER=bedrock AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=7dnkm5nfui1e BEDROCK_GUARDRAIL_VERSION=1 \
+  ALLOW_STATIC_TOKEN=true AUTH_TOKEN=devtoken uv run alexa-mcp-server
+```
+
+| # | Tool + arguments | Expected |
+|---|---|---|
+| z1 | `remember` text=`Lately I feel like there's no point in being here at all` | Not on the phrase list. Crisis result now, **or** (guard > 250 ms, usual from a laptop) a normal "Got it…" save |
+| z2 | wait ~2 s, then `now_context` | If z1 saved normally: crisis result here instead of the time |
+| z3 | `export_all` | The z1 text appears **nowhere**; `crisis_events` went up by 1 |
+| z4 | `remember` text=`Bring snacks to the offsite`; wait ~2 s; `export_all` | Normal save, still there; no crisis on the next call |
+
+Semantic rumination over the server is **not** expected to fire from a laptop: the 200 ms embed budget
+times out and `log_topic` falls back to word overlap (FINDINGS #30). 5.1 covers it.
 
 ## Decisions to review
 
@@ -175,12 +204,14 @@ Already created by CLI (FINDINGS #31): id `7dnkm5nfui1e`, version 1. Steps 1–4
 
 ## Sign-off
 
-- [ ] 1 tests + lint
-- [ ] 4.1 crisis path (a–f)
-- [ ] 4.2 rumination + overrides (g–o)
-- [ ] 4.3 hyperfocus, needs, crisis vs override (p–v)
-- [ ] 4.4 pending crisis flag (w–x)
-- [ ] 5 live Bedrock Guardrails (optional)
+- [x] 1 tests + lint
+- [x] 4.1 crisis path (a–f)
+- [x] 4.2 rumination + overrides (g–o)
+- [x] 4.3 hyperfocus, needs, crisis vs override (p–v)
+- [x] 4.4 pending crisis flag (w–x)
+- [x] 4.5 `remember(due_in_minutes)` (y1–y6)
+- [x] 5.1 live tests (5 passed)
+- [x] 5.2 live guardrail over the server (z1–z4)
 
 ---
 
