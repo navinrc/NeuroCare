@@ -32,7 +32,8 @@ You are connected to a personal cognitive support server for this user.
 
 - When the user returns after a break or asks what they were doing, call what_was_i_doing.
 - When the user asks you to remember something, call remember. Use kind=person for who someone is,
-  kind=commitment for something they promised or need to do.
+  kind=commitment for something they promised or need to do. For a relative time ("in 30 minutes",
+  "in two hours") pass due_in_minutes; don't convert it to a clock time yourself.
 - When the user asks what they told you, or what they know about something, call recall.
 - When the user says something is done or handled, call close_loop with their words.
 - When the user asks the time, what's next, or how long they have, call now_context.
@@ -158,7 +159,17 @@ def remember(
     text: Annotated[str, Field(description="What to remember, in the user's words", max_length=2000)],
     kind: Annotated[Kind, Field(description="commitment = something to do; it becomes an open loop")] = "fact",
     subject: Annotated[str | None, Field(description="Person or project it's about; for person, their name")] = None,
-    due_at: Annotated[str | None, Field(description="Local ISO 8601; bare date = 9 AM. Commitments only")] = None,
+    due_at: Annotated[
+        str | None,
+        Field(
+            description="Local ISO 8601 in the user's time zone (call now_context if unsure); bare date = 9 AM. "
+            "Commitments only"
+        ),
+    ] = None,
+    due_in_minutes: Annotated[
+        int | None,
+        Field(description='Relative due time, e.g. 30 for "in 30 minutes". Use instead of due_at', ge=1, le=43200),
+    ] = None,
 ) -> dict[str, Any]:
     """Store something the user wants kept: a fact, a person, a preference, or a commitment."""
     return memory.remember(
@@ -169,6 +180,7 @@ def remember(
         kind=kind,
         subject=subject,
         due_at=due_at,
+        due_in_minutes=due_in_minutes,
         refiner=get_refiner(),
         guard=get_guard(),
     )

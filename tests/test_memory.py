@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import pytest
 from conftest import NOW, USER
 
 from alexa_mcp_server.pillars import memory
@@ -54,6 +55,27 @@ def test_commitment_due_at_uses_profile_timezone(seeded):
     assert result["due_at"] == "2026-10-06T09:30:00-04:00"
     loops = memory.open_loops(seeded, USER, NOW)["loops"]
     assert {"id": result["id"], "text": "Call the bank", "due_at": "2026-10-06T09:30:00-04:00"} in loops
+
+
+def test_commitment_due_in_minutes_uses_server_clock(seeded):
+    result = memory.remember(seeded, USER, "Call the bank", NOW, kind="commitment", due_in_minutes=30)
+    assert result["due_at"] == "2026-10-05T14:40:00-04:00"  # NOW is 2:10 PM New York
+    assert "Due" in result["speak"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"kind": "commitment", "due_at": "2026-10-06T09:30", "due_in_minutes": 30}, "not both"),
+        ({"kind": "fact", "due_in_minutes": 30}, "only for commitments"),
+        ({"kind": "commitment", "due_in_minutes": 0}, "due_in_minutes must be"),
+        ({"kind": "commitment", "due_in_minutes": memory.MAX_DUE_MINUTES + 1}, "due_in_minutes must be"),
+    ],
+)
+def test_due_in_minutes_rejects_bad_input(seeded, kwargs, message):
+    result = memory.remember(seeded, USER, "Call the bank", NOW, **kwargs)
+    assert result["error"]["code"] == "INVALID_ARGUMENT"
+    assert message in result["error"]["message"]
 
 
 def test_commitment_date_only_due_at_defaults_to_morning(seeded):

@@ -1,6 +1,7 @@
 import json
+from datetime import datetime, timedelta
 
-from conftest import SEED
+from conftest import NOW, SEED
 from mcp import Client
 
 from alexa_mcp_server import mcp, server
@@ -91,6 +92,15 @@ async def test_invalid_kind_rejected(mcp_store):
     async with Client(mcp) as client:
         result = await client.call_tool("remember", {"text": "x", "kind": "secret"})
     assert result.is_error
+
+
+async def test_remember_due_in_minutes_over_mcp(mcp_store):
+    args = {"text": "Call the bank", "kind": "commitment"}
+    async with Client(mcp) as client:
+        result = await client.call_tool("remember", {**args, "due_in_minutes": 30})
+        too_far = await client.call_tool("remember", {**args, "due_in_minutes": 50000})
+    assert datetime.fromisoformat(result.structured_content["due_at"]) == NOW + timedelta(minutes=30)
+    assert too_far.is_error  # le=43200 in the tool schema
 
 
 async def test_profile_resource(mcp_store):

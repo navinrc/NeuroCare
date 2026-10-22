@@ -18,6 +18,7 @@ Kind = Literal["fact", "person", "preference", "commitment"]
 Result = dict[str, Any]
 
 MAX_TEXT = 2000
+MAX_DUE_MINUTES = 30 * 24 * 60
 CLOSE_LOOP_MARGIN = 0.1
 """Fuzzy candidates closer than this to the best one make ``close_loop`` ask instead of guess."""
 
@@ -149,17 +150,25 @@ def remember(
     refiner: Refiner | None = None,
     guard: Any = None,
     inbox_id: str | None = None,
+    due_in_minutes: int | None = None,
 ) -> Result:
     """``guard`` is the model-based crisis check (``safety.crisis.Guard``); ``inbox_id`` links a
-    "remind me to reply" commitment to its message (Telegram button)."""
+    "remind me to reply" commitment to its message (Telegram button). ``due_in_minutes`` is resolved
+    with the server clock, so "in 30 minutes" needs no time zone from the caller."""
     text = text.strip()
     subject = subject.strip() if subject and subject.strip() else None
     if not text or len(text) > MAX_TEXT:
         return error("INVALID_ARGUMENT", f"text must be 1 to {MAX_TEXT} characters", "I didn't catch what to remember.")
     if kind == "person" and not subject:
         return error("INVALID_ARGUMENT", "subject (the person's name) is required", "Who is this about?")
-    if due_at and kind != "commitment":
+    if due_at and due_in_minutes is not None:
+        return error("INVALID_ARGUMENT", "pass due_at or due_in_minutes, not both", "When is that due?")
+    if (due_at or due_in_minutes is not None) and kind != "commitment":
         return error("INVALID_ARGUMENT", "due_at is only for commitments", "I can only set a due time on a commitment.")
+    if due_in_minutes is not None and not 1 <= due_in_minutes <= MAX_DUE_MINUTES:
+        return error(
+            "INVALID_ARGUMENT", f"due_in_minutes must be 1 to {MAX_DUE_MINUTES}", "I didn't understand when that's due."
+        )
 
     check = crisis.precheck(store, user_id, text, now, guard=guard, refiner=refiner)
     if check.crisis:
@@ -174,6 +183,8 @@ def remember(
             due_utc = utc_iso(parse(due_at, tz))
         except ValueError:
             return error("INVALID_ARGUMENT", "due_at must be ISO 8601", "I didn't understand when that's due.")
+    elif due_in_minutes is not None:
+        due_utc = utc_iso(now + timedelta(minutes=due_in_minutes))
     stamp = utc_iso(now)
     said = speech.second_person(text)
 

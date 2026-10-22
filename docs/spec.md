@@ -134,7 +134,7 @@ sequenceDiagram
 
 ### 5.1 Memory
 
-#### `remember(text, kind="fact", subject=None, due_at=None)`
+#### `remember(text, kind="fact", subject=None, due_at=None, due_in_minutes=None)`
 Store something the user wants kept.
 
 | Param | Type | Notes |
@@ -142,7 +142,8 @@ Store something the user wants kept.
 | `text` | str (≤ 2000) | What to remember, in the user's words |
 | `kind` | `fact \| person \| preference \| commitment` | `commitment` creates an open loop |
 | `subject` | str? | Person or project it's about; for `person`, the person's name |
-| `due_at` | datetime? | Commitments only |
+| `due_at` | datetime? | Commitments only. Local ISO 8601 in the profile time zone; bare date = 9 AM |
+| `due_in_minutes` | int? (1–43200) | Commitments only. Relative due ("in 30 minutes"), resolved with the server clock; not with `due_at` |
 
 Returns `{ id, kind, deduplicated: bool, speak }`.
 Deduplication: same `kind` + `subject` and text similarity above the fuzzy threshold updates the
