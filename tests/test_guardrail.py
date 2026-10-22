@@ -174,19 +174,19 @@ def test_topics_outside_window_or_unrelated_do_not_count(seeded):
 
 
 def test_rumination_by_embedding_cosine(seeded):
-    phrasings = ["the presentation tomorrow", "giving my talk to the team", "standing up in front of everyone"]
+    phrasings = ["the presentation tomorrow", "what if my presentation goes badly", "is my presentation going to be ok"]
     embedder = FakeEmbedder(similar=[phrasings])
     results = [
         guardrail.log_topic(seeded, USER, text, NOW + timedelta(minutes=i), embedder=embedder)
         for i, text in enumerate(phrasings)
     ]
-    assert [r["count"] for r in results] == [1, 2, 3]  # no shared words; matched on cosine
+    assert [r["count"] for r in results] == [1, 2, 3]  # Jaccard < 0.5; matched on cosine
     assert results[-1]["detected"] is True
 
 
 def test_rumination_without_embedding_consent_uses_words_only(seeded):
     memory.set_preference(seeded, USER, "consent.embeddings", False, NOW)
-    phrasings = ["the presentation tomorrow", "giving my talk to the team", "standing up in front of everyone"]
+    phrasings = ["the presentation tomorrow", "what if my presentation goes badly", "is my presentation going to be ok"]
     embedder = FakeEmbedder(similar=[phrasings])
     results = [guardrail.log_topic(seeded, USER, t, NOW, embedder=embedder) for t in phrasings]
     assert results[-1]["count"] == 1

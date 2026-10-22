@@ -23,7 +23,7 @@ NEEDS: tuple[Need, ...] = ("water", "food", "break")
 MAX_TOPIC = 500
 TTL = timedelta(days=7)
 JACCARD_MIN = 0.5
-COSINE_MIN = 0.80
+COSINE_MIN = 0.40  # Titan v2: same worry reworded 0.44–0.70, unrelated <= 0.22 (FINDINGS #29)
 NEED_OFFERS = {"water": "Want to get some water?", "food": "Want to eat something?", "break": "Want a short break?"}
 _ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
 

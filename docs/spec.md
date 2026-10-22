@@ -441,7 +441,7 @@ Called by Alexa when the user raises a worry or keeps coming back to a subject.
 1. Crisis precheck (on full `topic` text).
 2. Store the topic with timestamp and embedding.
 3. Count earlier topics inside `guardrail.rumination_window_minutes` that are similar:
-   Jaccard word overlap ≥ 0.5 **or** embedding cosine ≥ 0.80.
+   Jaccard word overlap ≥ 0.5 **or** embedding cosine ≥ 0.40 (Titan v2, measured live).
 4. If `count ≥ guardrail.rumination_threshold` and no active override:
    `detected = true`, `redirect` = one concrete action (a next physical step, write it down, or a
    deliberate switch) chosen from the profile's preferred redirects.
@@ -453,7 +453,7 @@ flowchart TD
     IN([log_topic topic]) --> CR{Crisis precheck}
     CR -- hit --> CRISIS[[Crisis result only<br/>topic not stored]]
     CR -- clear --> STORE[Store topic + embedding<br/>TTL 7 days]
-    STORE --> COUNT[Count similar topics in window<br/>Jaccard ≥ 0.5 OR cosine ≥ 0.80]
+    STORE --> COUNT[Count similar topics in window<br/>Jaccard ≥ 0.5 OR cosine ≥ 0.40]
     COUNT --> TH{count ≥ threshold?}
     TH -- no --> PLAIN([detected: false<br/>plain acknowledgement])
     TH -- yes --> OV{Override active?}

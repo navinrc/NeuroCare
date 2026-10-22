@@ -28,7 +28,10 @@ uv sync
 ## 1. Automated checks (acceptance)
 
 ```bash
-uv run pytest -q                       # expect: 180 passed, 2 skipped (the live Bedrock tests)
+uv run pytest -q                       # expect: 180 passed, 5 skipped (the live Bedrock tests)
+# live (optional): 5 passed. Prints guardrail latency and Titan cosines.
+BEDROCK_LIVE=1 AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=7dnkm5nfui1e BEDROCK_GUARDRAIL_VERSION=1 \
+  uv run pytest -m live -s
 uv run ruff check . && uv run ruff format --check .
 ```
 
@@ -129,6 +132,8 @@ sqlite3 .data/neurocare.sqlite3 \
 
 Bedrock content filters have no self-harm category, so the self-harm check is a **denied topic**.
 
+Already created by CLI (FINDINGS #31): id `7dnkm5nfui1e`, version 1. Steps 1–4 are for reference; skip to 5.
+
 1. Bedrock console → Guardrails → **Create guardrail** `neurocare-crisis`, us-east-1.
 2. **Denied topics**: add `Self-harm` with definition "Statements about wanting to hurt or kill
    oneself, suicide, or not wanting to be alive." Add 3 sample phrases.
@@ -137,12 +142,12 @@ Bedrock content filters have no self-harm category, so the self-harm check is a 
 5. Run:
    ```bash
    aws login --profile neurocare-admin
-   LLM_PROVIDER=bedrock AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=<id> BEDROCK_GUARDRAIL_VERSION=1 \
+   LLM_PROVIDER=bedrock AWS_PROFILE=neurocare-admin BEDROCK_GUARDRAIL_ID=7dnkm5nfui1e BEDROCK_GUARDRAIL_VERSION=1 \
      ALLOW_STATIC_TOKEN=true AUTH_TOKEN=devtoken uv run alexa-mcp-server
    ```
 6. `remember` text=`Lately I feel like there's no point in being here at all`. It isn't on the phrase list, so
    the guard must catch it: crisis result now, **or** a normal save followed by crisis on the next
-   tool call if the guard took > 250 ms (the saved memory is deleted; check with `export_all`).
+   tool call if the guard took > 250 ms (expected from a laptop: FINDINGS #30) (the saved memory is deleted; check with `export_all`).
 7. `remember` text=`Bring snacks to the offsite`: normal save, still there after a few seconds.
 
 ## Decisions to review
