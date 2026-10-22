@@ -75,3 +75,12 @@ def make_embedder(settings: Settings) -> Embedder | None:
 
         return BedrockEmbedder(settings.bedrock_embed_model_id, settings.aws_region)
     return None
+
+
+def make_guard(settings: Settings) -> Any:
+    """A ``safety.crisis.Guard`` when a Bedrock guardrail is configured, else ``None`` (phrase list only)."""
+    if settings.llm_provider == "bedrock" and settings.bedrock_guardrail_id:
+        from alexa_mcp_server.llm.bedrock import BedrockGuard
+
+        return BedrockGuard(settings.bedrock_guardrail_id, settings.bedrock_guardrail_version, settings.aws_region)
+    return None

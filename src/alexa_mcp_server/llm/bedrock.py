@@ -54,3 +54,25 @@ class BedrockEmbedder:
         except (BotoCoreError, ClientError) as exc:
             raise LLMError(f"bedrock embedding failed: {type(exc).__name__}") from None
         return json.loads(response["body"].read())["embedding"]
+
+
+class BedrockGuard:
+    """Bedrock Guardrails ``ApplyGuardrail`` on user input (self-harm / violence filters, spec §6)."""
+
+    def __init__(self, guardrail_id: str, version: str, region: str):
+        self.guardrail_id = guardrail_id
+        self.version = version
+        config = Config(connect_timeout=1, read_timeout=2, retries={"max_attempts": 1})
+        self._client = boto3.client("bedrock-runtime", region_name=region, config=config)
+
+    def intervenes(self, text: str) -> bool:
+        try:
+            response = self._client.apply_guardrail(
+                guardrailIdentifier=self.guardrail_id,
+                guardrailVersion=self.version,
+                source="INPUT",
+                content=[{"text": {"text": text}}],
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise LLMError(f"apply_guardrail failed: {type(exc).__name__}") from None
+        return response.get("action") == "GUARDRAIL_INTERVENED"

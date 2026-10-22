@@ -100,3 +100,45 @@ async def test_profile_resource(mcp_store):
     profile = json.loads(result.contents[0].text)
     assert profile["display_name"] == "Sam"
     assert "speak" not in profile
+
+
+async def test_guardrail_tools_over_mcp(mcp_store):
+    memory.seed(mcp_store, "demo", SEED, server.clock())
+    async with Client(mcp) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert {"log_topic", "check_hyperfocus", "log_need", "override"} <= names
+        for _ in range(3):
+            topic = await client.call_tool("log_topic", {"topic": "the presentation tomorrow"})
+        assert topic.structured_content["detected"] is True
+        hyper = await client.call_tool("check_hyperfocus", {})
+        assert hyper.structured_content["speak"]
+        need = await client.call_tool("log_need", {"kind": "water"})
+        assert need.structured_content["speak"].startswith("Noted: water")
+        assert (await client.call_tool("log_need", {"kind": "coffee"})).is_error
+        snooze = await client.call_tool("override", {"token": "snooze_15m"})
+        assert snooze.structured_content["active_until"]
+
+
+async def test_crisis_short_circuits_over_mcp(mcp_store):
+    memory.seed(mcp_store, "demo", SEED, server.clock())
+    async with Client(mcp) as client:
+        for name, args in [
+            ("remember", {"text": "I can't go on"}),
+            ("decode", {"message": "I want to die"}),
+            ("log_topic", {"topic": "thinking about suicide"}),
+        ]:
+            result = await client.call_tool(name, args)
+            assert result.structured_content["crisis"] is True, name
+            assert set(result.structured_content) == {"crisis", "resources", "speak"}, name
+
+
+async def test_pending_crisis_flag_comes_first_on_any_tool(mcp_store):
+    memory.seed(mcp_store, "demo", SEED, server.clock())
+    state = mcp_store.get("USER#demo", "STATE") or {}
+    mcp_store.put("USER#demo", "STATE", {**state, "crisis_flag_at": "2026-10-05T18:09:00+00:00"})
+    async with Client(mcp) as client:
+        first = await client.call_tool("now_context", {})
+        assert first.structured_content["crisis"] is True
+        second = await client.call_tool("now_context", {})
+        assert "crisis" not in second.structured_content
+        assert (await client.call_tool("ping", {})).content[0].text == "pong"

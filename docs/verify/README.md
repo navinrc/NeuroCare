@@ -8,6 +8,7 @@ run in the Inspector, decisions to review, known gaps, a sign-off checklist, and
 |---|---|---|
 | 2 · Sense of time | [phase-2.md](phase-2.md) | merged |
 | 3 · Translator + Bedrock wrapper | [phase-3.md](phase-3.md) | merged; live Bedrock test needs you |
+| 4 · Guardrail | [phase-4.md](phase-4.md) | PR open; manual sign-off needs you |
 
 [FINDINGS.md](FINDINGS.md) collects every bug, gap, and decision across phases.
 

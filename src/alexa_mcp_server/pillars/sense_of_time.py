@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from alexa_mcp_server import speech
 from alexa_mcp_server.ids import new_ulid
 from alexa_mcp_server.matching import normalize
+from alexa_mcp_server.pillars import overrides
 from alexa_mcp_server.pillars.memory import Result, error, load_profile
 from alexa_mcp_server.store.base import Item, Store, user_pk
 from alexa_mcp_server.timeutil import local, minutes_between, utc_iso
@@ -19,8 +20,8 @@ DAY_START = time(5, 0)
 """Local time the working day starts; from ``time.end_of_day`` until here counts as after end of day."""
 SOON_MINUTES = 180
 """``now_context`` speaks "in about N minutes" only for commitments due within this window."""
-OVERRIDE_OPTIONS = ["snooze_15m", "keep_going_once", "pause_for_session", "lower_sensitivity"]
-"""Override tokens (spec §5.5); the ``override`` tool itself arrives with the guardrail in phase 4."""
+OVERRIDE_OPTIONS = list(overrides.TOKENS)
+"""Override tokens offered with a guardrail prompt (spec §5.5)."""
 
 
 # --- helpers --------------------------------------------------------------------------------
@@ -213,6 +214,10 @@ def check_in(store: Store, user_id: str, now: datetime) -> Result:
         "override_options": OVERRIDE_OPTIONS if level != "none" else [],
     }
     speak = f"You started {task} {speech.duration(elapsed)} ago."
+    if level != "none" and overrides.suppress(store, user_id, "checkin", now):
+        # An active override hides the prompt, not the level (spec §5.2 state diagram).
+        result.update(suppressed=True, override_options=[], speak=speak)
+        return result
     if late:
         speak += " It's after your end of day."
     if level in ("nudge", "hard"):

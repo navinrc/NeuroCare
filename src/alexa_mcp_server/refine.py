@@ -36,6 +36,8 @@ class Deps:
     llm: LLM | None
     embedder: Embedder | None
     clock: Callable[[], datetime]
+    guard: Any = None
+    """``safety.crisis.Guard`` for the background crisis re-check (Bedrock Guardrails)."""
 
 
 Job = Callable[[Deps, str, str], None]

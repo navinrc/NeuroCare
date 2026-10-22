@@ -19,6 +19,7 @@ from alexa_mcp_server.llm import LLMError
 from alexa_mcp_server.matching import fuzzy_score, normalize
 from alexa_mcp_server.pillars.memory import Result, error, load_profile
 from alexa_mcp_server.refine import LLM_TIMEOUT, Deps, Refiner, job
+from alexa_mcp_server.safety import crisis
 from alexa_mcp_server.store.base import Item, Store, user_pk
 from alexa_mcp_server.timeutil import local, utc_iso
 
@@ -429,8 +430,15 @@ def _decode_item(
     sender_param: str | None,
     voice: bool,
     refiner: Refiner | None,
+    check: crisis.Precheck | None = None,
+    guard: crisis.Guard | None = None,
 ) -> Result:
     pk = user_pk(user_id)
+    if check is None:  # forwarded items are checked when they are decoded, not on ingest
+        check = crisis.precheck(store, user_id, item["text"], now, guard=guard, refiner=refiner)
+        if check.crisis:
+            store.delete(pk, item["sk"])
+            return check.crisis
     profile = load_profile(store, user_id)
     tz = ZoneInfo(profile["timezone"])
     now_local = now.astimezone(tz)
@@ -491,6 +499,7 @@ def _decode_item(
         "refine": "pending",
     }
     store.put(pk, item["sk"], doc, ttl=item.get("ttl") or _ttl(now))
+    crisis.attach(store, user_id, check, item["sk"])
     if refiner:
         refiner.submit("decode", user_id, item["sk"])
         fresh = store.get(pk, item["sk"])
@@ -506,19 +515,23 @@ def decode(
     message: str | None = None,
     sender: str | None = None,
     refiner: Refiner | None = None,
+    guard: crisis.Guard | None = None,
     wait: float = 0.0,
 ) -> Result:
     """``wait``: seconds to hold the answer for the refine, so voice speaks the model's summary."""
     if message is not None and message.strip():
         if len(message) > MAX_MESSAGE:
             return error("INVALID_ARGUMENT", f"message is over {MAX_MESSAGE} characters", "That message is too long.")
+        check = crisis.precheck(store, user_id, message, now, guard=guard, refiner=refiner)
+        if check.crisis:
+            return check.crisis  # the text is not stored
         item = add_inbox_item(store, user_id, message.strip(), now, source="voice")
-        result = _decode_item(store, user_id, item, now, sender, voice=True, refiner=refiner)
+        result = _decode_item(store, user_id, item, now, sender, voice=True, refiner=refiner, check=check)
     else:
         item = _newest_undecoded(store, user_id)
         if item is None:
             return error("NOT_FOUND", "no undecoded inbox item", "I don't have a new message from you to read.")
-        result = _decode_item(store, user_id, item, now, sender, voice=False, refiner=refiner)
+        result = _decode_item(store, user_id, item, now, sender, voice=False, refiner=refiner, guard=guard)
     return _await_refine(store, user_id, result, wait) if refiner and wait > 0 else result
 
 
@@ -589,7 +602,14 @@ def _headline(item: Item, tz: ZoneInfo, now_local: datetime) -> str:
     return text + "."
 
 
-def triage_inbox(store: Store, user_id: str, now: datetime, limit: int = 3, refiner: Refiner | None = None) -> Result:
+def triage_inbox(
+    store: Store,
+    user_id: str,
+    now: datetime,
+    limit: int = 3,
+    refiner: Refiner | None = None,
+    guard: crisis.Guard | None = None,
+) -> Result:
     limit = max(1, min(limit, 10))
     pk = user_pk(user_id)
     tz = ZoneInfo(load_profile(store, user_id)["timezone"])
@@ -597,7 +617,9 @@ def triage_inbox(store: Store, user_id: str, now: datetime, limit: int = 3, refi
 
     undecoded = [i for i in store.query(pk, "INBOX#") if not i.get("decoded_at")]
     for item in undecoded[:TRIAGE_DECODE_LIMIT]:  # oldest first
-        _decode_item(store, user_id, item, now, None, voice=False, refiner=refiner)
+        decoded = _decode_item(store, user_id, item, now, None, voice=False, refiner=refiner, guard=guard)
+        if decoded.get("crisis"):
+            return decoded
     pending = max(0, len(undecoded) - TRIAGE_DECODE_LIMIT)
 
     open_items = [i for i in store.query(pk, "INBOX#") if i.get("decoded_at") and not i.get("resolved_at")]

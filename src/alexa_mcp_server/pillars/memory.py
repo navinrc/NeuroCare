@@ -10,6 +10,7 @@ from alexa_mcp_server.ids import new_ulid
 from alexa_mcp_server.llm import Embedder
 from alexa_mcp_server.matching import DEDUP_THRESHOLD, normalize, similarity, tiered_match
 from alexa_mcp_server.refine import Refiner
+from alexa_mcp_server.safety import crisis
 from alexa_mcp_server.store.base import Item, Store, user_pk
 from alexa_mcp_server.timeutil import local, minutes_between, parse, utc_iso
 
@@ -146,7 +147,11 @@ def remember(
     subject: str | None = None,
     due_at: str | None = None,
     refiner: Refiner | None = None,
+    guard: Any = None,
+    inbox_id: str | None = None,
 ) -> Result:
+    """``guard`` is the model-based crisis check (``safety.crisis.Guard``); ``inbox_id`` links a
+    "remind me to reply" commitment to its message (Telegram button)."""
     text = text.strip()
     subject = subject.strip() if subject and subject.strip() else None
     if not text or len(text) > MAX_TEXT:
@@ -155,6 +160,10 @@ def remember(
         return error("INVALID_ARGUMENT", "subject (the person's name) is required", "Who is this about?")
     if due_at and kind != "commitment":
         return error("INVALID_ARGUMENT", "due_at is only for commitments", "I can only set a due time on a commitment.")
+
+    check = crisis.precheck(store, user_id, text, now, guard=guard, refiner=refiner)
+    if check.crisis:
+        return check.crisis
 
     pk = user_pk(user_id)
     profile = load_profile(store, user_id)
@@ -176,6 +185,7 @@ def remember(
         if not deduplicated:
             notes.append(text)
         store.put(pk, sk, {**person, "notes": notes, "updated_at": stamp, "embedding": None})
+        crisis.attach(store, user_id, check, sk)
         if refiner and profile["consent"]["embeddings"]:
             refiner.submit("embed", user_id, sk)
         return {"id": sk, "kind": kind, "deduplicated": deduplicated, "speak": f"Got it. I'll remember {said}."}
@@ -208,7 +218,10 @@ def remember(
             "created_at": stamp,
             "updated_at": stamp,
         }
+        if inbox_id:
+            doc["inbox_id"] = inbox_id
     store.put(pk, sk, doc)
+    crisis.attach(store, user_id, check, sk)
     if refiner and profile["consent"]["embeddings"]:
         refiner.submit("embed", user_id, sk)
 
