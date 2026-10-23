@@ -9,7 +9,8 @@ run in the Inspector, decisions to review, known gaps, a sign-off checklist, and
 | 2 · Sense of time | [phase-2.md](phase-2.md) | merged |
 | 3 · Translator + Bedrock wrapper | [phase-3.md](phase-3.md) | merged; live Bedrock test needs you |
 | 4 · Guardrail | [phase-4.md](phase-4.md) | merged; signed off |
-| 5 · Task breakdown + daily plan | [phase-5.md](phase-5.md) | PR open; signed off |
+| 5 · Task breakdown + daily plan | [phase-5.md](phase-5.md) | merged; signed off |
+| 6 · DynamoDB + CDK + Lambda + account linking | [phase-6.md](phase-6.md) | PR open; deploy + sign-off needs you |
 
 [FINDINGS.md](FINDINGS.md) collects every bug, gap, and decision across phases.
 

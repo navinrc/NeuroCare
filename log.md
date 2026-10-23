@@ -3,6 +3,28 @@
 Running status of the autonomous build through the spec phases (`docs/spec.md` §11).
 Details per phase: `docs/verify/phase-N.md`. Every bug and decision: `docs/verify/FINDINGS.md`.
 
+## 2026-10-23 (later) — start here
+
+1. **Phase 6 deploy + verification (you).** `docs/verify/phase-6.md` steps 2–6: `cdk deploy`,
+   demo user + seed, endpoint checks, Inspector OAuth, latency, Alexa account linking.
+   Runbook: `infra/README.md`. Branch `feat/phase-6-aws`.
+2. FINDINGS #47 (PKCE not enforceable in Cognito), #53 (Alexa redirect URIs), #54 (`decode` waits 8 s).
+3. Still open from phase 5: FINDINGS #41.
+
+Phase 5 merged (PR #12) and signed off.
+
+### Phase 6 built — DynamoDB, CDK, Lambda, account linking
+
+- `store/dynamo.py` (`STORE=dynamo`); every store-backed test runs on SQLite and moto DynamoDB.
+- `auth.py`: Cognito access-token verifier (JWKS cache), PRM at the root path too.
+- `lambda_handler.py`: own Function URL → ASGI adapter (stateless HTTP, JSON responses), async
+  self-invoke refines (`refine.LambdaRefiner`).
+- `infra/`: CDK app (table, Lambda arm64 + URL, Cognito pool/domain/resource server/client, IAM);
+  bundle built with `uv`, no Docker. Synth passes; not deployed.
+- `scripts/latency.py` for the < 500 ms check.
+- Tests: 470 passed, 9 skipped; infra 4 passed.
+- FINDINGS #43–#54.
+
 ## 2026-10-23 — start here
 
 1. Phase 5 signed off by you (2026-10-23). Merge the phase 5 PR.

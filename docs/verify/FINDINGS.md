@@ -76,3 +76,20 @@ decisions made without asking. Newest phase at the bottom. Status: **fixed** · 
 | 40 | decision | One refine per task at a time: `split_step` while the `decompose` refine is pending returns the current (already 5-minute) step with "Still planning the steps". Avoids the two jobs racing on one task. |
 | 41 | open | `plan_today` ranks by due date first, as spec §5.6 says, so any item with a due date (even next week) outranks a `must` message whose reply-by is today. Consider folding `reply_by` into the due date for messages. |
 | 42 | decision | The brain-dump prompt asks for a bare date when only a day is named (parsed as 9 AM local) and to drop the day words from the item text. Before that, live Haiku gave midnight and kept "mom's birthday Sunday". |
+
+## Phase 6 — DynamoDB, CDK, Lambda, account linking (2026-10-23)
+
+| # | Status | Finding |
+|---|---|---|
+| 43 | decision | **No Mangum.** The SDK's `StreamableHTTPSessionManager.run()` can start only once per instance, and Mangum enters the ASGI lifespan on every invocation, so the second request would fail. `lambda_handler.LambdaASGI` keeps one event loop and one lifespan per container and runs each Function URL event on it (~150 lines, no new dependency). |
+| 44 | decision | `PUBLIC_BASE_URL` (the OAuth resource URL) can't come from CloudFormation: the Function URL depends on the function, so passing it into the function's environment is a cycle. At init the handler calls `GetFunctionUrlConfig` on itself once. `public_base_url` in `cdk.json` overrides it (custom domain). |
+| 45 | decision | PRM is served at `/.well-known/oauth-protected-resource/mcp` by the SDK (RFC 9728 §3.1, path-suffixed) and at the root path as the spec says. `WWW-Authenticate` points at the path-suffixed one (SDK default). |
+| 46 | decision | Cognito access tokens have no `aud`, so the SDK's resource check (`validate_token_resource`) is off. The verifier checks RS256, `iss`, `token_use=access`, `client_id`, scope `neurocare/tools`, and `exp` (30 s leeway). An unknown `kid` refetches the JWKS at most every 5 minutes. |
+| 47 | needs you | Cognito has no "require PKCE" switch for this app client: it checks S256 when the client sends a `code_challenge` (Alexa+ does), but would also accept a flow without one. With a client secret also required, that is acceptable for the demo. Confirm during linking (step 6) that the authorize request carries `code_challenge_method=S256`. |
+| 48 | decision | The Lambda bundle is built on the host with `uv pip install --python-platform aarch64-manylinux_2_28 --only-binary :all:` (arm64 wheels; 79 MB unzipped), so `cdk synth` needs no Docker. Docker bundling stays as the fallback. |
+| 49 | open | If the async self-invoke itself fails (throttling, IAM), the item stays `refine: pending`; `decode` then waits its 8 s and returns the baseline. Rare; logged. Could mark `failed` on invoke error. |
+| 50 | decision | The `store` fixture runs every store-backed test on SQLite **and** moto DynamoDB (spec §11 test approach). Suite time 23 s → ~65 s. |
+| 51 | decision | The DynamoDB table (PITR on) and the Cognito user pool are `RETAIN` on `cdk destroy`: they hold user data and the demo account. |
+| 52 | decision | DynamoDB numbers come back as `Decimal`; the store converts them to `int`/`float` by their written form, and documents go through JSON on the way in, so both backends return the same shapes. `ttl` is the table's TTL attribute; reads also filter expired items, since DynamoDB deletes them up to days late. |
+| 53 | needs you | The add-on's redirect URIs exist only in the Alexa developer console. Add them to `infra/cdk.json` → `alexa_redirect_uris` and redeploy. The Inspector callback is registered meanwhile. |
+| 54 | open | `decode` and `decode_result` wait up to 8 s for the Bedrock refine (phase 3, PR #9), well past Alexa's 500 ms. They are left out of `scripts/latency.py`. Check how Alexa+ behaves on a slow `decode` during step 6; if it times out, return the baseline at once on the Alexa path. |

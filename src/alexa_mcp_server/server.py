@@ -23,7 +23,7 @@ from alexa_mcp_server import auth, semantic  # noqa: F401 — semantic registers
 from alexa_mcp_server.config import load_settings
 from alexa_mcp_server.llm import LLM, Embedder, make_embedder, make_guard, make_llm
 from alexa_mcp_server.pillars import guardrail, inbox, memory, overrides, plan, sense_of_time, tasks, translator
-from alexa_mcp_server.refine import Deps, Refiner, ThreadRefiner
+from alexa_mcp_server.refine import Deps, LambdaRefiner, Refiner, ThreadRefiner
 from alexa_mcp_server.safety import crisis
 from alexa_mcp_server.store import Store, make_store
 
@@ -114,11 +114,20 @@ def deps() -> Deps:
 
 
 def get_refiner() -> Refiner:
-    """Background refine jobs (spec §4). The Lambda self-invoke runner replaces this in phase 6."""
+    """Background refine jobs (spec §4): a thread pool locally, an async self-invoke on Lambda."""
     global _refiner
     if _refiner is None:
-        _refiner = ThreadRefiner(deps())
+        name = settings.lambda_function_name
+        _refiner = LambdaRefiner(name) if name else ThreadRefiner(deps())
     return _refiner
+
+
+def warm() -> None:
+    """Build clients ahead of the first request (Lambda init), so it fits the latency budget."""
+    deps()
+    if isinstance(refiner := get_refiner(), LambdaRefiner):
+        refiner.connect()
+    auth.warm(_token_verifier)
 
 
 def _user() -> str:
@@ -445,6 +454,10 @@ async def post_inbox(request: Request) -> JSONResponse:
         return JSONResponse({"error": {"code": "INVALID_ARGUMENT", "message": "; ".join(problems)}}, 400)
     item = translator.add_inbox_item(get_store(), user_id, text.strip(), clock(), sender=sender, source=source)
     return JSONResponse({"id": item["sk"]}, 201)
+
+
+if _auth_settings is not None:
+    auth.add_root_metadata_route(mcp, _auth_settings, settings.cognito_scope)
 
 
 @mcp.resource("profile://me", name="profile", mime_type="application/json")

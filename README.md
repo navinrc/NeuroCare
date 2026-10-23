@@ -49,6 +49,15 @@ npx @modelcontextprotocol/inspector
 | `BEDROCK_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Converse model / inference profile |
 | `BEDROCK_EMBED_MODEL_ID` | `amazon.titan-embed-text-v2:0` | |
 | `AWS_REGION` | `us-east-1` | Credentials come from the usual AWS chain (`AWS_PROFILE`, …) |
+| `TABLE_NAME` | `cognitive-substrate` | DynamoDB table when `STORE=dynamo` |
+| `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_SCOPE` | unset | Cognito access tokens (Alexa+ account linking); `sub` is the user id |
+| `PUBLIC_BASE_URL` | `http://HOST:PORT` | Resource URL in the OAuth metadata; on Lambda it defaults to the Function URL |
+
+## Deploy to AWS
+
+`infra/` is the CDK app (DynamoDB, Lambda + Function URL, Cognito). Steps, account linking, and
+the latency check: [`infra/README.md`](infra/README.md) and
+[`docs/verify/phase-6.md`](docs/verify/phase-6.md).
 
 ## Forwarding a message (`POST /inbox`)
 
