@@ -7,6 +7,10 @@ See the [spec](docs/spec.md) for design, tools, and AWS architecture, and
 
 Built for the [Amazon Developer Hackathon 2026](https://amazonappdev2026.devpost.com/) — **Alexa+ track**.
 
+**▶ Demo video (2:52):** https://youtu.be/tjRjl7ehqKg
+
+[![NeuroCare demo video](https://img.youtube.com/vi/tjRjl7ehqKg/maxresdefault.jpg)](https://youtu.be/tjRjl7ehqKg)
+
 Implements a [Model Context Protocol](https://modelcontextprotocol.io) server over the
 [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http),
 per the track requirements.

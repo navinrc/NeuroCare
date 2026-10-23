@@ -1,5 +1,7 @@
 # NeuroCare — a cognitive substrate for Alexa+
 
+**Demo video:** https://youtu.be/tjRjl7ehqKg
+
 **Track:** Alexa+ (self-hosted MCP server, Streamable HTTP, plus the simulated-experience path)
 
 ## What it does
