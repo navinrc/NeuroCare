@@ -1,0 +1,31 @@
+# Phase 5 live proof: task breakdown + daily plan over HTTP (no LLM configured: baselines + fallback).
+- list_tools: true
+- tool: decompose
+  args: {goal: "I don't know where to start with my taxes"}
+  expect: {source: baseline}
+- tool: next_step
+  expect: {n: 1, remaining: 1}
+- tool: split_step
+  expect: {remaining: 1}
+- tool: skip_step
+  expect: {skipped: null, remaining: 1}
+- tool: done_step
+  expect: {remaining: 0}
+- tool: next_step
+  expect: {remaining: 0}
+- tool: decompose
+  args: {goal: "I want to kill myself"}
+  expect: {crisis: true}
+- tool: brain_dump
+  args: {text: "Brain dump: renew passport, fix the slides and call the dentist"}
+  expect: {source: baseline}
+- tool: brain_dump
+  args: {text: "laundry, I want to end my life"}
+  expect: {crisis: true}
+- tool: plan_today
+  expect: {open_count: 6}
+- tool: plan_today
+  args: {energy: 2}
+- tool: close_loop
+  args: {text: "the Q3 deck"}
+- tool: wrap_up

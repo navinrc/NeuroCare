@@ -3,6 +3,27 @@
 Running status of the autonomous build through the spec phases (`docs/spec.md` §11).
 Details per phase: `docs/verify/phase-N.md`. Every bug and decision: `docs/verify/FINDINGS.md`.
 
+## 2026-10-23 — start here
+
+1. Phase 5 signed off by you (2026-10-23). Merge the phase 5 PR.
+2. Then decide on FINDINGS #41 (plan ranking: due date beats a `must` message's reply-by).
+
+Phase 4 signed off; FINDINGS #17 fix merged in PR #11.
+
+### Phase 5 built — task breakdown + daily plan
+
+- New `pillars/tasks.py` (`decompose`, `next_step`, `done_step`, `split_step`, `skip_step`) and
+  `pillars/plan.py` (`brain_dump`, `plan_today`, `wrap_up`). 29 tools total.
+- Fast first for `decompose`, `split_step`, `brain_dump`: baseline at once, Bedrock refine in the
+  background; failure keeps the baseline (`fallback_hint` for decompose).
+- Crisis precheck on `decompose` and `brain_dump` (closes FINDINGS #27).
+- `close_loop` also closes dumped items; `speech.join_spoken` two-item fix.
+- Tests: 256 passed, 7 skipped. Live Bedrock: decompose + split, brain dump pass.
+  Proof run 14/14 (`scripts/smoke/phase5.yaml`).
+- Live run found a 2-minute model step (now rounded up to 5, #33) and a midnight due date from
+  the dump prompt (#42). The proof run found two awkward baseline `speak` lines (#34).
+- FINDINGS #32–#42.
+
 ## 2026-10-21 — start here
 
 1. **Phase 3 manual verification (you).** All sign-off items in `docs/verify/phase-3.md`

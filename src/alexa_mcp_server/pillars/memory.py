@@ -108,6 +108,11 @@ def _open_messages(store: Store, user_id: str) -> list[Item]:
     return [i for i in store.query(user_pk(user_id), "INBOX#") if i.get("decoded_at") and not i.get("resolved_at")]
 
 
+def _open_items(store: Store, user_id: str) -> list[Item]:
+    """Open brain-dump items (spec §5.6); ``close_loop`` marks them done for ``wrap_up``."""
+    return [i for i in store.query(user_pk(user_id), "ITEM#") if i.get("status") == "open"]
+
+
 def _loop_text(item: Item) -> str:
     if item["sk"].startswith("INBOX#"):
         return f"the message from {item.get('sender') or 'someone'}"
@@ -298,7 +303,7 @@ def open_loops(store: Store, user_id: str, now: datetime, limit: int = 5) -> Res
 def close_loop(store: Store, user_id: str, text: str, now: datetime, embedder: Embedder | None = None) -> Result:
     profile = load_profile(store, user_id)
     tz = _tz(profile)
-    loops = _open_loop_items(store, user_id) + _open_messages(store, user_id)
+    loops = _open_loop_items(store, user_id) + _open_items(store, user_id) + _open_messages(store, user_id)
     resolution, hits = tiered_match(
         text,
         loops,

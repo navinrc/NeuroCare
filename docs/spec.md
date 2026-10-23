@@ -165,7 +165,8 @@ Unfinished commitments and pending replies, soonest due first.
 Returns `{ loops: [{ id, text, due_at? }], speak }`.
 
 #### `close_loop(text)`
-Resolves `text` against open loops (same tiered matching as `recall`). Returns
+Resolves `text` against open loops, open brain-dump items (§5.6), and unhandled decoded messages
+(same tiered matching as `recall`). Returns
 `{ closed: { id, text } | null, candidates?: [...], speak }`. If more than one candidate is close,
 nothing is closed and `candidates` is returned so Alexa can ask which one.
 
@@ -409,7 +410,10 @@ If a work block is open for the step, it is closed; the next step opens a new bl
 "This one's too big." Replaces only the current step with 2–4 smaller steps (Bedrock, same
 validation; step 1 ≤ 5 minutes). Returns `{ steps: [...], remaining, refine, speak }`; `speak` reads
 the new first step. Fast first (§4): the instant step is "Do just the first 5 minutes of <step>",
-replaced by the refined steps when they land. On refine failure the instant step stays.
+replaced by the refined steps when they land. On refine failure the instant step stays. A step that is
+already ≤ 5 minutes gets "Do just the first 2 minutes of <step>" instead, and the decompose baseline
+step gets "Write one line about what done looks like for <goal>". Later steps the model makes
+shorter than 5 minutes are rounded up to 5; any other validation miss fails the refine.
 
 #### `skip_step()`
 "Not now." Moves the current step to the end of the list. Returns `{ skipped, next, remaining, speak }`.
@@ -781,10 +785,11 @@ Stored as one `PROFILE` item; seeded from `profile_seed.yaml` in the demo.
 | `MEM#` | fact / preference / commitment | `kind`, `text`, `subject`, `due_at`, `status`, `embedding` |
 | `PERSON#<name>` | person | `role`, `notes`, `aliases` |
 | `BLOCK#` | work block | `task`, `started_at`, `ended_at`, `summary` |
-| `TASK#` | task breakdown | `goal`, `steps`, `active`, `cursor`, `refine`, `refined_at` |
+| `TASK#` | task breakdown | `goal`, `steps` (`id`, `text`, `minutes`, `done`), `active`, `cursor`, `max_step_minutes`, `refine`, `refined_at` |
 | `INBOX#` | received message + triage | `text`, `sender`, `source`, `decoded_at`, `result` (decode output), `refine`, `refined_at`, `resolved_at`, `ttl` |
 | `ITEM#` | brain-dump item | `text`, `tag`, `bucket`, `due_at`, `status`, `refine`, `refined_at` |
-| `PLAN#<date>` | daily plan | `priorities` (item ids), `energy`, `wrapped_at` |
+| `DUMP#` | raw brain-dump text for the refine | `text`, `items` (ITEM ids), `refine`, `ttl` (1 day) |
+| `PLAN#<date>` | daily plan | `priorities` (item ids), `energy`, `wrapped_at`, `carried` (ids rolled over from the day before) |
 | `TOPIC#` | rumination topic | `text`, `embedding`, `ttl` |
 | `NEED#` | water/food/break log | `kind`, `ttl` |
 | `OVERRIDE#` | override log | `token`, `active_until` |
@@ -800,7 +805,7 @@ Three items live outside the user partition, because the caller knows only a cha
 | `TOKEN#<sha256>` / `INBOX` | personal inbox token (hash only) | `user_id`, `created_at` |
 
 - `embedding`: float32 vector stored as binary (1024 dims for Titan v2 at default size).
-- TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days; `PUSH#` after 2 days; `LINKCODE#` after
+- TTL: `TOPIC#`, `NEED#`, and `INBOX#` expire after 7 days; `DUMP#` after 1 day; `PUSH#` after 2 days; `LINKCODE#` after
   10 minutes.
 - Access is always by `PK` (single user partition, or the three lookup items above); similarity is
   computed in-process — per-user corpora are small. No vector database: at ~2,000 vectors × 1024 dims (~8 MB) a brute-force
@@ -975,6 +980,7 @@ You are connected to a personal cognitive support server for this user.
   call decompose with the goal. Do not ask clarifying questions first.
 - When the user says "done", "next", "too big", or "not now" during a task, call done_step,
   next_step, split_step, or skip_step.
+- When a tool result includes fallback_hint, follow it.
 - Speak the `speak` field from tool results in plain, literal words. Do not add idioms.
 - Prefer accuracy over agreement. If the user's claim conflicts with what memory shows, say so gently.
 - If a tool result has crisis: true, say only the provided message and resources. Do not redirect,

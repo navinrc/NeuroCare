@@ -40,6 +40,8 @@ def second_person(text: str) -> str:
 def join_spoken(parts: list[str]) -> str:
     if len(parts) <= 1:
         return "".join(parts)
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
     return ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
