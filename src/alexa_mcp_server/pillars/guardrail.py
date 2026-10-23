@@ -3,6 +3,7 @@
 The crisis precheck lives in ``safety.crisis``; overrides in ``pillars.overrides``.
 """
 
+import re
 from datetime import datetime, time, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -17,6 +18,13 @@ from alexa_mcp_server.refine import Refiner
 from alexa_mcp_server.safety import crisis
 from alexa_mcp_server.store.base import Item, Store, user_pk
 from alexa_mcp_server.timeutil import local, minutes_between, utc_iso
+
+_WORRY_LEAD_IN = re.compile(
+    r"^(i'?m |i am )?(really |so |a bit |kind of )?"
+    r"(worried|worrying|anxious|nervous|stressed|scared|concerned)( about| that)?\s+",
+    re.IGNORECASE,
+)
+"""Dropped from the topic when it is spoken back: "worried about the presentation" → "the presentation"."""
 
 Need = Literal["water", "food", "break"]
 NEEDS: tuple[Need, ...] = ("water", "food", "break")
@@ -104,12 +112,12 @@ def log_topic(
 
     count = len(similar) + 1
     result: Result = {"detected": False, "count": count, "window_minutes": window, "override_options": []}
-    said = speech.second_person(topic)
+    said = speech.second_person(_WORRY_LEAD_IN.sub("", topic.strip()) or topic)
     if count < threshold:
-        result["speak"] = f"Okay. I've noted that {said} is on your mind."
+        result["speak"] = f"Okay, noted: {said}."
         return result
     if overrides.suppress(store, user_id, "rumination", now):
-        result.update(suppressed=True, speak=f"Okay. I've noted that {said} is on your mind.")
+        result.update(suppressed=True, speak=f"Okay, noted: {said}.")
         return result
 
     redirects = profile["guardrail"]["preferred_redirects"]

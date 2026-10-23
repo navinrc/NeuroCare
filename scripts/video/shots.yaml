@@ -1,0 +1,61 @@
+# Demo video shot list (docs/submission/video-script.md). Read by record.mjs and assemble.py.
+#
+# Audio clips by id: scripts/video/audio/<id>.(m4a|wav|mp3|aiff) if you recorded it, otherwise a
+# TTS placeholder is generated. `say` is what you speak to Alexa; `show` is what appears on screen
+# (defaults to `say`); `after` is narration played once Alexa has answered.
+
+slides:
+  title:
+    heading: "NeuroCare"
+    sub: "A cognitive substrate for Alexa+"
+    narration: >-
+      For ADHD and autistic people, the hard part isn't setting a timer. It's losing the thread,
+      time blindness, ambiguous messages, and worry loops. NeuroCare gives Alexa plus what it's missing.
+  architecture:
+    image: docs/diagrams/aws_architecture.png
+    narration: >-
+      It's an MCP server on AWS Lambda, with DynamoDB, Cognito account linking, and Bedrock.
+      Here it runs live, in our Alexa plus simulator.
+  closing:
+    heading: "Live on AWS"
+    bullets:
+      - "29 MCP tools · Streamable HTTP · stateless on Lambda"
+      - "26 ms median warm server time · fast first, refine later with Bedrock"
+      - "Crisis precheck on every free-text tool · user always in charge"
+      - "497 automated tests on SQLite and DynamoDB"
+    narration: >-
+      Every reply came from live tool calls on AWS. Thanks for watching.
+
+turns:
+  - id: u01
+    say: "Alexa, what was I doing?"
+    show: "What was I doing?"
+    after: "Context, back after an interruption."
+  - id: u02
+    say: "Plan my day. My energy's low."
+    after: "Low energy: one priority, not three."
+  - id: u03
+    say: "What does this message from Priya mean? Per my last email, I still need the Q3 deck. Can you send it by today?"
+  - id: u04
+    say: "What should I say?"
+    after: "Likely meaning, urgency, and a draft reply."
+  - id: u05
+    say: "I don't know where to start with my taxes."
+  - id: u06
+    say: "This one's too big."
+    after: "One small step at a time."
+  - id: u07
+    say: "I'm worried about the presentation tomorrow."
+  - id: u08
+    say: "I'm worried my presentation will go badly."
+  - id: u09
+    say: "I'm worried the presentation won't be okay."
+    after: "Third time around, it notices the loop."
+  - id: u10
+    say: "Remind me in one minute to drink water."
+    reminder: true
+    after: "Native reminders, for hyperfocus."
+  - id: u11
+    say: "Wrap up for today."
+  - id: devpanel
+    dev_panel: true

@@ -40,3 +40,5 @@ cdk.out/
 .DS_Store
 .idea/
 .vscode/
+scripts/video/out/
+scripts/video/node_modules/
