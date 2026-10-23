@@ -18,6 +18,10 @@ dependencies = [
 alexa-mcp-server = "alexa_mcp_server:main"
 alexa-mcp-seed = "alexa_mcp_server.seed:main"
 alexa-mcp-inbox-token = "alexa_mcp_server.tokens:main"
+alexa-sim = "alexa_sim:main"
+
+[tool.uv.build-backend]
+module-name = ["alexa_mcp_server", "alexa_sim"]
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

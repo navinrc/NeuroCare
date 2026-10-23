@@ -53,6 +53,21 @@ npx @modelcontextprotocol/inspector
 | `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_SCOPE` | unset | Cognito access tokens (Alexa+ account linking); `sub` is the user id |
 | `PUBLIC_BASE_URL` | `http://HOST:PORT` | Resource URL in the OAuth metadata; on Lambda it defaults to the Function URL |
 
+## Alexa+ simulator (demo client)
+
+Hackathon entrants get no Alexa+ developer tools, so the demo runs on an Echo Show–style simulator
+(spec §5.9): a real MCP client of the server with real Cognito account linking, Bedrock tool use,
+voice in/out (Chrome), and native reminders.
+
+```bash
+# local: server with a static token, simulator using it (Bedrock credentials needed for the model)
+ALLOW_STATIC_TOKEN=true AUTH_TOKEN=devtoken uv run alexa-mcp-server
+SIM_STATIC_TOKEN=devtoken AWS_PROFILE=<profile> uv run alexa-sim   # http://127.0.0.1:8100
+```
+
+Deployed: the `SimulatorUrl` stack output. Click **Link NeuroCare**, sign in as the demo user, then
+hold the mic button (or space bar) and talk.
+
 ## Deploy to AWS
 
 `infra/` is the CDK app (DynamoDB, Lambda + Function URL, Cognito). Steps, account linking, and

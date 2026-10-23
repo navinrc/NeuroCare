@@ -44,7 +44,7 @@ def test_app_client_is_auth_code_with_secret_and_refresh(template):
             "AllowedOAuthFlowsUserPoolClient": True,
             "GenerateSecret": True,
             "AllowedOAuthScopes": Match.array_with(["openid"]),
-            "CallbackURLs": ["https://pitangui.amazon.com/api/skill/link/TEST", INSPECTOR_CALLBACK],
+            "CallbackURLs": Match.array_with(["https://pitangui.amazon.com/api/skill/link/TEST", INSPECTOR_CALLBACK]),
             "RefreshTokenValidity": 43200,  # 30 days, in minutes
             "EnableTokenRevocation": True,
         },
@@ -90,3 +90,17 @@ def test_lambda_may_invoke_itself_and_bedrock(template):
         "bedrock:ApplyGuardrail",
     } <= actions
     assert {"dynamodb:Query", "dynamodb:PutItem", "dynamodb:BatchWriteItem"} <= actions
+
+
+def test_simulator_is_wired_without_cycles(template):
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {"FunctionName": "neurocare-alexa-sim", "Handler": "alexa_sim.lambda_handler.handler", "Timeout": 60},
+    )
+    template.has_resource_properties(
+        "AWS::DynamoDB::GlobalTable",
+        {"TableName": "neurocare-sim", "TimeToLiveSpecification": {"AttributeName": "ttl", "Enabled": True}},
+    )
+    (client,) = template.find_resources("AWS::Cognito::UserPoolClient").values()
+    callbacks = json.dumps(client["Properties"]["CallbackURLs"])
+    assert "sim/callback" in callbacks  # the simulator's own callback is registered on alexa-plus

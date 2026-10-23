@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alexa+ Simulator</title>
+<style>
+  :root {
+    --bg: #0b1220; --screen: #111a2e; --text: #eef2f8; --muted: #8fa0bd; --line: #24324d;
+    --cyan: #19c3f0; --blue: #2b6bff; --yellow: #ffc21a; --red: #ff5a5f; --chip: #1a2540;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.4 "Amazon Ember", "Helvetica Neue", Arial, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; padding: 16px; gap: 14px; }
+  .device { width: min(960px, 100%); aspect-ratio: 16 / 10; background: #05080f; border-radius: 22px;
+    padding: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.55); position: relative; }
+  .screen { position: relative; height: 100%; background: radial-gradient(circle at 20% 0%, #1b2a4a 0%, var(--screen) 55%);
+    border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; padding: 22px 28px; }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: transparent; transition: background .2s; }
+  .bar.listening { background: linear-gradient(90deg, var(--blue), var(--cyan), var(--blue)); animation: sweep 1.2s linear infinite; background-size: 200% 100%; }
+  .bar.thinking { background: linear-gradient(90deg, var(--cyan), var(--blue), var(--cyan)); animation: sweep .7s linear infinite; background-size: 200% 100%; }
+  .bar.speaking { background: var(--cyan); }
+  .bar.notify { background: var(--yellow); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes sweep { to { background-position: 200% 0; } }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .top { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: 15px; }
+  .clock { font-size: 22px; color: var(--text); font-weight: 300; }
+  .label { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 10px; }
+  .main { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; min-height: 0; }
+  .heard { color: var(--muted); font-size: 18px; min-height: 26px; }
+  .reply { font-size: clamp(22px, 3.2vw, 34px); font-weight: 300; line-height: 1.3; max-height: 60%; overflow: auto; }
+  .reply.crisis { color: #fff; }
+  .resources { display: flex; gap: 10px; flex-wrap: wrap; }
+  .resource { background: var(--chip); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 15px; }
+  .reminder-card { background: rgba(255,194,26,.12); border: 1px solid var(--yellow); border-radius: 12px;
+    padding: 12px 16px; font-size: 20px; display: none; align-items: center; justify-content: space-between; gap: 12px; }
+  .reminder-card.show { display: flex; }
+  .reminder-card button { background: var(--yellow); color: #111; }
+  .bottom { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--muted); font-size: 14px; }
+  .controls { width: min(960px, 100%); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; border: 0; border-radius: 999px; padding: 10px 16px; cursor: pointer; background: var(--chip); color: var(--text); }
+  button:disabled { opacity: .5; cursor: default; }
+  .mic { background: var(--blue); width: 56px; height: 56px; padding: 0; display: grid; place-items: center; font-size: 22px; }
+  .mic.on { background: var(--cyan); color: #04121a; }
+  form { flex: 1; display: flex; gap: 8px; min-width: 240px; }
+  input[type=text] { flex: 1; font: inherit; background: var(--screen); color: var(--text); border: 1px solid var(--line);
+    border-radius: 999px; padding: 10px 16px; }
+  .link { background: transparent; border: 1px solid var(--line); }
+  .linked-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--red); margin-right: 6px; }
+  .linked-dot.on { background: #3ad07a; }
+  .panel { width: min(960px, 100%); background: #0e1626; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; display: none; max-height: 40vh; overflow: auto; }
+  .panel.show { display: block; }
+  .call { border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .call b { color: var(--cyan); }
+  .ms { color: var(--yellow); }
+  pre { white-space: pre-wrap; margin: 4px 0 0; color: var(--muted); }
+  .hint { color: var(--muted); font-size: 13px; width: min(960px, 100%); }
+  @media (max-width: 640px) { .device { aspect-ratio: auto; height: 70vh; } }
+</style>
+</head>
+<body>
+  <div class="device">
+    <div class="screen">
+      <div class="top">
+        <span class="clock" id="clock">--:--</span>
+        <span class="label">Alexa+ simulator</span>
+      </div>
+      <div class="main">
+        <div class="heard" id="heard">Hold the mic button or space bar and say something.</div>
+        <div class="reply" id="reply"></div>
+        <div class="resources" id="resources"></div>
+        <div class="reminder-card" id="reminder"><span id="reminder-text"></span><button id="reminder-ok">OK</button></div>
+      </div>
+      <div class="bottom">
+        <span id="status"><span class="linked-dot" id="dot"></span><span id="link-status">Checking NeuroCare…</span></span>
+        <span id="upcoming"></span>
+      </div>
+      <div class="bar" id="bar"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="mic" id="mic" title="Hold to talk (or hold space)">🎙</button>
+    <form id="form"><input type="text" id="text" placeholder="Or type to Alexa…" autocomplete="off" maxlength="1000"><button>Send</button></form>
+    <button class="link" id="link">Link NeuroCare</button>
+    <button class="link" id="dev">Dev panel</button>
+  </div>
+  <div class="panel" id="panel"></div>
+  <div class="hint">Speech recognition needs Chrome. Typed input works everywhere.</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const state = { linked: false, canLink: false, busy: false, seen: new Set() };
+  const bar = (mode) => { $("bar").className = "bar " + (mode || ""); };
+
+  function tick() {
+    $("clock").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  tick(); setInterval(tick, 10000);
+
+  // --- speech out -------------------------------------------------------------------------------
+  function speak(text) {
+    return new Promise((resolve) => {
+      if (!("speechSynthesis" in window) || !text) return resolve();
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const voice = speechSynthesis.getVoices().find((v) => /Samantha|Google US English|Joanna/.test(v.name));
+      if (voice) u.voice = voice;
+      u.rate = 1.02;
+      u.onend = u.onerror = () => resolve();
+      speechSynthesis.speak(u);
+    });
+  }
+
+  function chime() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [[880, 0], [1320, 0.18]].forEach(([freq, at]) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "sine"; o.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + at + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.6);
+        o.connect(g).connect(ctx.destination); o.start(ctx.currentTime + at); o.stop(ctx.currentTime + at + 0.7);
+      });
+    } catch (e) { /* audio blocked until the first click */ }
+  }
+
+  // --- server state -----------------------------------------------------------------------------
+  async function refresh() {
+    try {
+      const r = await fetch("/sim/state", { credentials: "same-origin" });
+      const s = await r.json();
+      state.linked = s.linked; state.canLink = s.can_link;
+      $("dot").classList.toggle("on", s.linked);
+      $("link-status").textContent = s.linked ? "NeuroCare linked" : (s.can_link ? "NeuroCare not linked" : "Linking not configured");
+      $("link").textContent = s.linked ? "Unlink" : "Link NeuroCare";
+      $("link").disabled = !s.can_link && !s.linked;
+      const next = s.upcoming.sort((a, b) => a.due_at - b.due_at)[0];
+      $("upcoming").textContent = next ? "⏰ " + new Date(next.due_at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " " + next.text : "";
+      for (const r of s.due) if (!state.seen.has(r.id)) fire(r);
+    } catch (e) { $("link-status").textContent = "Simulator offline"; }
+  }
+  setInterval(refresh, 10000);
+
+  async function fire(reminder) {
+    state.seen.add(reminder.id);
+    bar("notify"); chime();
+    $("reminder-text").textContent = "Reminder: " + reminder.text;
+    $("reminder").classList.add("show"); $("reminder").dataset.id = reminder.id;
+    await new Promise((r) => setTimeout(r, 900));
+    await speak("Here's your reminder. " + reminder.text);
+  }
+  $("reminder-ok").onclick = async () => {
+    const id = $("reminder").dataset.id;
+    $("reminder").classList.remove("show"); bar("");
+    if (id) await fetch(`/sim/reminders/${id}/ack`, { method: "POST" });
+    refresh();
+  };
+
+  // --- a turn -----------------------------------------------------------------------------------
+  async function send(text) {
+    text = (text || "").trim();
+    if (!text || state.busy) return;
+    state.busy = true; $("mic").disabled = true;
+    $("heard").textContent = "“" + text + "”"; $("reply").textContent = ""; $("resources").innerHTML = "";
+    $("reply").classList.remove("crisis");
+    bar("thinking");
+    const started = performance.now();
+    try {
+      const r = await fetch("/sim/turn", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, tz }),
+      });
+      const t = await r.json();
+      if (!r.ok) throw new Error(t.error || r.status);
+      $("reply").textContent = t.reply;
+      if (t.crisis) {
+        $("reply").classList.add("crisis");
+        $("resources").innerHTML = (t.crisis.resources || []).map((x) => `<div class="resource"><b>${esc(x.name)}</b><br>${esc(x.contact)}</div>`).join("");
+      }
+      log(text, t, Math.round(performance.now() - started));
+      bar("speaking");
+      await speak(t.reply);
+      if (t.link_required) refresh();
+      if (t.reminders_set && t.reminders_set.length) refresh();
+    } catch (e) {
+      $("reply").textContent = "Sorry, I'm having trouble right now.";
+    } finally {
+      bar(""); state.busy = false; $("mic").disabled = false;
+    }
+  }
+
+  function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+  function log(text, t, totalMs) {
+    const calls = t.tool_calls.map((c) => `<div class="call"><b>${esc(c.name)}</b> <span class="ms">${c.ms} ms</span>
+      <pre>args ${esc(JSON.stringify(c.arguments))}\n${esc(JSON.stringify(c.result, null, 1))}</pre></div>`).join("");
+    $("panel").insertAdjacentHTML("afterbegin", `<div class="call">▶ “${esc(text)}” — model ${t.model_ms} ms · turn ${totalMs} ms${calls}</div>`);
+  }
+
+  $("form").onsubmit = (e) => { e.preventDefault(); const v = $("text").value; $("text").value = ""; send(v); };
+  $("dev").onclick = () => $("panel").classList.toggle("show");
+  $("link").onclick = async () => {
+    if (state.linked) { await fetch("/sim/unlink", { method: "POST" }); refresh(); }
+    else location.href = "/sim/link";
+  };
+
+  // --- speech in (push to talk) -----------------------------------------------------------------
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, finalText = "";
+  function startListening() {
+    if (!Recognition || state.busy || rec) return;
+    speechSynthesis && speechSynthesis.cancel();
+    finalText = "";
+    rec = new Recognition(); rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalText += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
+      }
+      $("heard").textContent = (finalText + interim) || "Listening…";
+    };
+    rec.onend = () => { const t = finalText; rec = null; $("mic").classList.remove("on"); if (t.trim()) send(t); else bar(""); };
+    rec.start(); $("mic").classList.add("on"); bar("listening"); $("heard").textContent = "Listening…";
+  }
+  function stopListening() { if (rec) rec.stop(); }
+  if (!Recognition) $("mic").title = "Speech recognition needs Chrome; type instead";
+  $("mic").addEventListener("pointerdown", startListening);
+  $("mic").addEventListener("pointerup", stopListening);
+  $("mic").addEventListener("pointerleave", stopListening);
+  document.addEventListener("keydown", (e) => { if (e.code === "Space" && document.activeElement.tagName !== "INPUT" && !e.repeat) { e.preventDefault(); startListening(); } });
+  document.addEventListener("keyup", (e) => { if (e.code === "Space" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); stopListening(); } });
+
+  const params = new URLSearchParams(location.search);
+  if (params.has("linked")) $("heard").textContent = "NeuroCare is linked. Try “What was I doing?”";
+  if (params.has("link_error")) $("heard").textContent = "Linking didn't work. Try again.";
+  if (params.has("linked") || params.has("link_error")) history.replaceState(null, "", "/");
+  refresh();
+})();
+</script>
+</body>
+</html>
