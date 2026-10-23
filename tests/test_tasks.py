@@ -106,7 +106,7 @@ def test_decompose_is_fast_first_with_slow_llm(store):
     assert time.perf_counter() - start < 0.3
     assert result["refine"] == "pending" and result["source"] == "baseline"
     assert result["steps"] == [
-        {"n": 1, "text": "Spend 5 minutes writing down what done looks like for do your taxes", "minutes": 5}
+        {"n": 1, "text": "Spend 5 minutes writing down what done looks like when you do your taxes", "minutes": 5}
     ]
     pending = tasks.next_step(store, USER)
     assert pending["speak"].endswith("Still planning the rest. Finish this one first.")
@@ -175,7 +175,7 @@ def test_split_of_long_step_starts_with_five_minutes(store):
     split = tasks.split_step(store, USER, refiner=inline(store, None))
     assert split["steps"][0] == {
         "n": 1,
-        "text": "Do just the first 5 minutes of fill in the income section",
+        "text": "Fill in the income section (first 5 minutes only)",
         "minutes": 5,
     }
 
@@ -269,12 +269,12 @@ def test_split_is_fast_first_and_keeps_instant_step_on_failure(taxes):
     assert time.perf_counter() - start < 0.3
     assert result["refine"] == "pending"
     assert result["steps"] == [
-        {"n": 1, "text": "Do just the first 2 minutes of put last year's return on the desk", "minutes": 2}
+        {"n": 1, "text": "Put last year's return on the desk (first 2 minutes only)", "minutes": 2}
     ]
     refiner.wait(5)
     failed = tasks.split_step(taxes, USER, refiner=inline(taxes, FakeLLM(LLMError("down"))))
     assert failed["refine"] == "failed"
-    assert failed["steps"][0]["text"] == "Do just the first 2 minutes of open the forms folder"
+    assert failed["steps"][0]["text"] == "Open the forms folder (first 2 minutes only)"
     assert len(stored(taxes)["steps"]) == 5
 
 

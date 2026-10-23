@@ -113,6 +113,11 @@ def goal_phrase(goal: str) -> str:
     return trimmed or goal.strip()
 
 
+def done_for(said: str) -> str:
+    """ "for your taxes", or "when you do your taxes" when the goal starts with a verb (FINDINGS #58)."""
+    return f"when you {said}" if verb_first(said) else f"for {said}"
+
+
 def _goal_said(task: Item) -> str:
     return speech.second_person(goal_phrase(task["goal"]))
 
@@ -124,10 +129,10 @@ def _lower_first(text: str) -> str:
 def _instant_split(step: dict[str, Any], goal: str) -> dict[str, Any]:
     """The fast-first stand-in for a split (spec §5.4), shorter than the step it replaces."""
     if step.get("baseline") == "decompose":
-        return _step(f"Write one line about what done looks like for {goal}", 2, "split")
+        return _step(f"Write one line about what done looks like {done_for(goal)}", 2, "split")
     if step["minutes"] <= FIRST_STEP_MAX:
-        return _step(f"Do just the first 2 minutes of {_lower_first(step['text'])}", 2, "split")
-    return _step(f"Do just the first 5 minutes of {_lower_first(step['text'])}", 5, "split")
+        return _step(f"{step['text']} (first 2 minutes only)", 2, "split")
+    return _step(f"{step['text']} (first 5 minutes only)", 5, "split")
 
 
 def _cursor(steps: list[dict[str, Any]]) -> int | None:
@@ -340,7 +345,7 @@ def decompose(
         store.put(pk, old["sk"], {**old, "active": False})
 
     said = speech.second_person(goal_phrase(goal))
-    first = _step(f"Spend 5 minutes writing down what done looks like for {said}", FIRST_STEP_MAX, "decompose")
+    first = _step(f"Spend 5 minutes writing down what done looks like {done_for(said)}", FIRST_STEP_MAX, "decompose")
     sk = f"TASK#{new_ulid()}"
     stamp = utc_iso(now)
     task = {

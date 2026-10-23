@@ -58,6 +58,21 @@
   .ms { color: var(--yellow); }
   pre { white-space: pre-wrap; margin: 4px 0 0; color: var(--muted); }
   .hint { color: var(--muted); font-size: 13px; width: min(960px, 100%); }
+  /* demo mode (?demo=1): scripted recording, the device fills the frame */
+  body.demo { justify-content: center; padding: 28px; gap: 18px; }
+  body.demo .controls, body.demo .hint { display: none; }
+  body.demo .device { width: min(1500px, 100%); }
+  body.demo .panel { width: min(1500px, 100%); max-height: 34vh; }
+  body.demo .heard { font-size: 28px; }
+  body.demo .reply { font-size: 44px; }
+  body.demo .clock { font-size: 34px; }
+  body.demo .label, body.demo .bottom { font-size: 20px; }
+  body.demo .resource { font-size: 22px; }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; min-height: 34px; }
+  .chip { font: 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--cyan); background: rgba(25,195,240,.08);
+    border: 1px solid rgba(25,195,240,.35); border-radius: 999px; padding: 7px 14px; opacity: 0; animation: chipin .35s forwards; }
+  .chip .ms { color: var(--muted); }
+  @keyframes chipin { to { opacity: 1; } }
   @media (max-width: 640px) { .device { aspect-ratio: auto; height: 70vh; } }
 </style>
 </head>
@@ -72,6 +87,7 @@
         <div class="heard" id="heard">Hold the mic button or space bar and say something.</div>
         <div class="reply" id="reply"></div>
         <div class="resources" id="resources"></div>
+        <div class="chips" id="chips"></div>
         <div class="reminder-card" id="reminder"><span id="reminder-text"></span><button id="reminder-ok">OK</button></div>
       </div>
       <div class="bottom">
@@ -150,11 +166,12 @@
 
   async function fire(reminder) {
     state.seen.add(reminder.id);
+    if (window.demo) { window.demo.fired.push({ id: reminder.id, text: reminder.text, at: performance.now() }); }
     bar("notify"); chime();
     $("reminder-text").textContent = "Reminder: " + reminder.text;
     $("reminder").classList.add("show"); $("reminder").dataset.id = reminder.id;
     await new Promise((r) => setTimeout(r, 900));
-    await speak("Here's your reminder. " + reminder.text);
+    if (!window.demo) await speak("Here's your reminder. " + reminder.text);
   }
   $("reminder-ok").onclick = async () => {
     const id = $("reminder").dataset.id;
@@ -240,6 +257,48 @@
   if (params.has("linked")) $("heard").textContent = "NeuroCare is linked. Try “What was I doing?”";
   if (params.has("link_error")) $("heard").textContent = "Linking didn't work. Try again.";
   if (params.has("linked") || params.has("link_error")) history.replaceState(null, "", "/");
+  // --- demo mode: hooks for the scripted recording (scripts/video) ---------------------------------
+  // Each turn is a real /sim/turn call; only the speech in and out is replaced (the recording has no
+  // microphone, and the replies are voiced afterwards from their real text).
+  if (params.has("demo")) {
+    document.body.classList.add("demo");
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    window.demo = {
+      fired: [],
+      async listen(text, ms) {
+        $("reply").textContent = ""; $("resources").innerHTML = ""; $("chips").innerHTML = ""; $("reply").classList.remove("crisis");
+        bar("listening"); $("heard").textContent = "Listening…";
+        const words = text.split(/\s+/);
+        await sleep(250);
+        for (let i = 1; i <= words.length; i++) {
+          $("heard").textContent = words.slice(0, i).join(" ");
+          await sleep(Math.max(60, (ms - 250) / words.length));
+        }
+        $("heard").textContent = "“" + text + "”";
+      },
+      async ask(text) {
+        bar("thinking");
+        const started = performance.now();
+        const r = await fetch("/sim/turn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, tz }) });
+        const t = await r.json();
+        log(text, t, Math.round(performance.now() - started));
+        return t;
+      },
+      show(t) {
+        $("reply").textContent = t.reply;
+        $("chips").innerHTML = t.tool_calls.map((c, i) => `<span class="chip" style="animation-delay:${0.25 + i * 0.15}s">${c.name === "set_reminder" ? "Alexa" : "NeuroCare"} · ${esc(c.name)} <span class="ms">${c.ms} ms</span></span>`).join("");
+        if (t.crisis) {
+          $("reply").classList.add("crisis");
+          $("resources").innerHTML = (t.crisis.resources || []).map((x) => `<div class="resource"><b>${esc(x.name)}</b><br>${esc(x.contact)}</div>`).join("");
+        }
+        bar("speaking");
+      },
+      idle() { bar(""); },
+      devPanel(on) { $("panel").classList.toggle("show", on); },
+      refresh,
+      ack: () => $("reminder-ok").click(),
+    };
+  }
   refresh();
 })();
 </script>

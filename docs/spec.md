@@ -410,9 +410,9 @@ If a work block is open for the step, it is closed; the next step opens a new bl
 #### `split_step()`
 "This one's too big." Replaces only the current step with 2–4 smaller steps (Bedrock, same
 validation; step 1 ≤ 5 minutes). Returns `{ steps: [...], remaining, refine, speak }`; `speak` reads
-the new first step. Fast first (§4): the instant step is "Do just the first 5 minutes of <step>",
+the new first step. Fast first (§4): the instant step is "<step> (first 5 minutes only)",
 replaced by the refined steps when they land. On refine failure the instant step stays. A step that is
-already ≤ 5 minutes gets "Do just the first 2 minutes of <step>" instead, and the decompose baseline
+already ≤ 5 minutes gets "<step> (first 2 minutes only)" instead, and the decompose baseline
 step gets "Write one line about what done looks like for <goal>". Later steps the model makes
 shorter than 5 minutes are rounded up to 5; any other validation miss fails the refine.
 
