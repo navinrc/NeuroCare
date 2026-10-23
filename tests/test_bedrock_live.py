@@ -1,4 +1,4 @@
-"""Real Bedrock calls (spec §11 phases 3–4). Skipped unless BEDROCK_LIVE=1 and AWS credentials are set:
+"""Real Bedrock calls (spec §11 phases 3–5). Skipped unless BEDROCK_LIVE=1 and AWS credentials are set:
 
 BEDROCK_LIVE=1 AWS_PROFILE=neurocare-admin uv run pytest -m live -s
 
@@ -15,7 +15,7 @@ from conftest import NOW, USER
 from alexa_mcp_server import semantic, vectors
 from alexa_mcp_server.config import load_settings
 from alexa_mcp_server.llm.bedrock import BedrockEmbedder, BedrockGuard, BedrockLLM
-from alexa_mcp_server.pillars import guardrail, memory, translator
+from alexa_mcp_server.pillars import guardrail, memory, plan, tasks, translator
 from alexa_mcp_server.refine import Deps, InlineRefiner
 from alexa_mcp_server.safety import crisis
 from alexa_mcp_server.store import SQLiteStore
@@ -120,3 +120,41 @@ def test_live_rumination_by_embedding(seeded, monkeypatch):
     ]
     print([(r["count"], r["detected"]) for r in results])
     assert results[-1]["detected"] is True
+
+
+def _live_refiner(store, now):
+    settings = load_settings()
+    llm = BedrockLLM(settings.bedrock_model_id, settings.aws_region)
+    return InlineRefiner(Deps(store=store, llm=llm, embedder=None, clock=lambda: now))
+
+
+def test_live_decompose_and_split():
+    store, now = SQLiteStore(":memory:"), datetime.now(UTC)
+    refiner = _live_refiner(store, now)
+    start = time.perf_counter()
+    result = tasks.decompose(store, "live", "I don't know where to start with my taxes", now, refiner=refiner)
+    print(
+        f"decompose refine {time.perf_counter() - start:.1f} s:", [(s["text"], s["minutes"]) for s in result["steps"]]
+    )
+    assert result["refine"] == "done", result
+    assert 3 <= len(result["steps"]) <= 12 and result["steps"][0]["minutes"] <= 5
+    tasks.done_step(store, "live", now)
+    split = tasks.split_step(store, "live", refiner=refiner)
+    print("split:", [(s["text"], s["minutes"]) for s in split["steps"]])
+    assert split["refine"] == "done", split
+    assert 2 <= len(split["steps"]) <= 4
+
+
+def test_live_brain_dump():
+    store, now = SQLiteStore(":memory:"), datetime.now(UTC)
+    result = plan.brain_dump(
+        store,
+        "live",
+        "renew passport, mom's birthday Sunday, salt and pepper for the party",
+        now,
+        refiner=_live_refiner(store, now),
+    )
+    print([(i["text"], i["tag"], i["bucket"], i.get("due_at")) for i in result["items"]], result["speak"])
+    assert result["refine"] == "done", result
+    assert len(result["items"]) == 3
+    assert any(i.get("due_at") for i in result["items"])

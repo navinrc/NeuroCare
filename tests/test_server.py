@@ -136,6 +136,8 @@ async def test_crisis_short_circuits_over_mcp(mcp_store):
             ("remember", {"text": "I can't go on"}),
             ("decode", {"message": "I want to die"}),
             ("log_topic", {"topic": "thinking about suicide"}),
+            ("decompose", {"goal": "I want to kill myself"}),
+            ("brain_dump", {"text": "laundry, I want to end my life"}),
         ]:
             result = await client.call_tool(name, args)
             assert result.structured_content["crisis"] is True, name
@@ -152,3 +154,25 @@ async def test_pending_crisis_flag_comes_first_on_any_tool(mcp_store):
         second = await client.call_tool("now_context", {})
         assert "crisis" not in second.structured_content
         assert (await client.call_tool("ping", {})).content[0].text == "pong"
+
+
+async def test_task_and_plan_tools_over_mcp(mcp_store):
+    memory.seed(mcp_store, "demo", SEED, server.clock())
+    async with Client(mcp) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert {"decompose", "next_step", "done_step", "split_step", "skip_step"} <= names
+        assert {"brain_dump", "plan_today", "wrap_up"} <= names
+        task = await client.call_tool("decompose", {"goal": "do my taxes"})
+        assert task.structured_content["refine"] == "failed"  # no LLM configured in tests
+        assert (await client.call_tool("next_step", {})).structured_content["fallback_hint"]
+        for name in ("split_step", "skip_step", "done_step"):
+            result = await client.call_tool(name, {})
+            assert not result.is_error and result.structured_content["speak"], name
+        dump = await client.call_tool("brain_dump", {"text": "renew passport, fix the slides"})
+        assert len(dump.structured_content["items"]) == 2
+        planned = await client.call_tool("plan_today", {"energy": 3})
+        assert len(planned.structured_content["priorities"]) == 2
+        assert (await client.call_tool("plan_today", {"energy": 7})).is_error  # le=5 in the schema
+        assert (await client.call_tool("decompose", {"goal": "x", "max_step_minutes": 2})).is_error
+        wrapped = await client.call_tool("wrap_up", {})
+        assert "moved to tomorrow" in wrapped.structured_content["speak"]

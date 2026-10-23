@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse
 from alexa_mcp_server import auth, semantic  # noqa: F401 — semantic registers the "embed" refine job
 from alexa_mcp_server.config import load_settings
 from alexa_mcp_server.llm import LLM, Embedder, make_embedder, make_guard, make_llm
-from alexa_mcp_server.pillars import guardrail, inbox, memory, overrides, sense_of_time, translator
+from alexa_mcp_server.pillars import guardrail, inbox, memory, overrides, plan, sense_of_time, tasks, translator
 from alexa_mcp_server.refine import Deps, Refiner, ThreadRefiner
 from alexa_mcp_server.safety import crisis
 from alexa_mcp_server.store import Store, make_store
@@ -49,6 +49,15 @@ You are connected to a personal cognitive support server for this user.
 - When decode returns needs_work or reply_needed, make at most one offer: a reminder or a breakdown.
 - After a decode, when the user asks what to say or what the sender wants, call decode_result.
 - When the user asks "what needs me?" or "anything urgent?", call triage_inbox.
+- When the user sounds overwhelmed by a goal ("I don't know where to start", "this is too much"),
+  call decompose with the goal. Do not ask clarifying questions first.
+- When the user says "done", "next", "too big", or "not now" during a task, call done_step,
+  next_step, split_step, or skip_step.
+- When a tool result includes fallback_hint, follow it.
+- When the user lists things to remember or says "brain dump", call brain_dump. Do not ask questions.
+- When the user asks to plan their day, call plan_today; pass energy if they mention it.
+  If they swap a priority, call plan_today again rather than editing items one by one.
+- When the user says "wrap up" or "done for today", call wrap_up.
 - Speak the `speak` field from tool results in plain, literal words. Do not add idioms.
 - Prefer accuracy over agreement. If the user's claim conflicts with what memory shows, say so gently.
 - If a tool result has crisis: true, say only the provided message and resources. Do not redirect,
@@ -339,6 +348,65 @@ def override(
 ) -> dict[str, Any]:
     """Quiet guardrail prompts when the user asks. Never affects crisis resources."""
     return overrides.override(get_store(), _user(), token, clock())
+
+
+@tool(WRITE)
+def decompose(
+    goal: Annotated[str, Field(description="The goal, in the user's words", max_length=500)],
+    max_step_minutes: Annotated[int, Field(description="Longest a step may take", ge=5, le=90)] = 25,
+) -> dict[str, Any]:
+    """Break a goal into small steps and make it the active task. Returns step 1 at once; the rest follow."""
+    return tasks.decompose(
+        get_store(), _user(), goal, clock(), max_step_minutes=max_step_minutes, refiner=get_refiner(), guard=get_guard()
+    )
+
+
+@tool(READ_ONLY)
+def next_step() -> dict[str, Any]:
+    """The next undone step of the active task."""
+    return tasks.next_step(get_store(), _user())
+
+
+@tool(WRITE)
+def done_step() -> dict[str, Any]:
+    """Mark the current step done and give the next one."""
+    return tasks.done_step(get_store(), _user(), clock())
+
+
+@tool(WRITE)
+def split_step() -> dict[str, Any]:
+    """The current step is too big: replace only it with smaller steps."""
+    return tasks.split_step(get_store(), _user(), refiner=get_refiner())
+
+
+@tool(WRITE)
+def skip_step() -> dict[str, Any]:
+    """Not now: move the current step to the end of the list."""
+    return tasks.skip_step(get_store(), _user())
+
+
+@tool(WRITE)
+def brain_dump(
+    text: Annotated[str, Field(description="Everything the user listed, in their words", max_length=2000)],
+) -> dict[str, Any]:
+    """Save one or more things the user listed, with no follow-up questions."""
+    return plan.brain_dump(get_store(), _user(), text, clock(), refiner=get_refiner(), guard=get_guard())
+
+
+@tool(WRITE)
+def plan_today(
+    energy: Annotated[
+        int | None, Field(description="The user's energy, 1 (low) to 5 (high), if they said", ge=1, le=5)
+    ] = None,
+) -> dict[str, Any]:
+    """Pick today's few priorities from everything open. Call again if the user swaps one."""
+    return plan.plan_today(get_store(), _user(), clock(), energy=energy)
+
+
+@tool(WRITE)
+def wrap_up() -> dict[str, Any]:
+    """End the day: say what got done, move unfinished priorities to tomorrow, and stop the open block."""
+    return plan.wrap_up(get_store(), _user(), clock())
 
 
 def _inbox_user(request: Request) -> str | None:
