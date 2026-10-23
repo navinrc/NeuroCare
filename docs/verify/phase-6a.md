@@ -52,7 +52,7 @@ uv run ruff check . && uv run ruff format --check .
 
 ## 2. Link (Chrome)
 
-Open the simulator → **Link NeuroCare** → Cognito sign-in. Use the demo user `navintheboss1998@gmail.com`;
+Open the simulator → **Link NeuroCare** → Cognito sign-in. Use the demo user;
 the password is in the scratchpad file from phase 6, and you can reset it in the Cognito console.
 
 **Expect:** back on the page with "NeuroCare is linked"; green dot.

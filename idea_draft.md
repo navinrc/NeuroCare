@@ -163,8 +163,7 @@ Each step is demoable on its own. Three solid pillars beat four half-built ones.
 
 ## Submission checklist
 
-- [ ] Public repo, open-source license (Open Source mini-challenge). No `LICENSE` file yet;
-      repo is private. Add MIT or Apache-2.0 before making it public.
+- [x] Public repo, open-source license (Open Source mini-challenge): MIT `LICENSE` added.
 - [ ] AWS usage documented: Bedrock, DynamoDB (AWS Builder mini-challenge)
 - [ ] Demo video < 3 min, English, public
 - [ ] Product feedback on every tool, API, and SDK used
