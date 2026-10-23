@@ -95,7 +95,7 @@ def prepare() -> None:
         if "after" in turn:
             durations[f"n_{turn['id']}"] = synth(f"n_{turn['id']}", turn["after"], "narrator")
     (HERE / "out" / "durations.json").write_text(json.dumps(durations, indent=1))
-    recorded = sorted(p.stem for p in RECORDED.glob("*")) if RECORDED.exists() else []
+    recorded = sorted(p.stem for p in RECORDED.glob("*.*") if not p.name.startswith(".")) if RECORDED.exists() else []
     print(f"{len(durations)} clips; your recordings used: {recorded or 'none'}")
 
 

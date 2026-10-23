@@ -132,7 +132,8 @@ def main() -> None:
     run(*inputs, "-filter_complex", ";".join(filters), "-map", "[mix]", "-ar", "48000", "-ac", "2", str(audio))
 
     final = OUT / "neurocare-demo.mp4"
-    run("-i", str(video), "-i", str(audio), "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+    run("-i", str(video), "-i", str(audio), "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000",
+        "-c:a", "aac", "-b:a", "192k", "-shortest",
         "-movflags", "+faststart", str(final))  # fmt: skip
     print(
         f"{final}  {seconds(final):.1f} s  (slides {sim_at:.1f}+{lengths['closing']:.1f} s, live take {sim_len:.1f} s)"
