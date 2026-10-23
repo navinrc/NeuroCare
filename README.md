@@ -1,9 +1,9 @@
 # NeuroCare
 
-A cognitive substrate for Alexa+: an MCP server that gives neurodivergent people persistent memory, a sense of time, a translator for ambiguous messages, task breakdown, a low-overwhelm daily plan, and guardrails against rumination and hyperfocus. An optional Telegram companion bot handles forwarded messages, a pinned daily view, and opt-in nudges.
+A cognitive substrate for Alexa+: an MCP server that gives neurodivergent people persistent memory, a sense of time, a translator for ambiguous messages, task breakdown, a low-overwhelm daily plan, and guardrails against rumination and hyperfocus. Because hackathon entrants can't deploy to real Alexa+, it ships with an Echo Show–style Alexa+ simulator: a real MCP client with real account linking. A Telegram companion bot for forwarded messages and opt-in nudges is designed (spec §5.7) but not built yet.
 
 See the [spec](docs/spec.md) for design, tools, and AWS architecture, and
-[AWS setup](docs/aws-setup.md) for account, Bedrock, Telegram, and agent-toolkit configuration.
+[AWS setup](docs/aws-setup.md) for account, Bedrock, Cognito, and agent-toolkit configuration.
 
 Built for the [Amazon Developer Hackathon 2026](https://amazonappdev2026.devpost.com/) — **Alexa+ track**.
 
@@ -81,7 +81,7 @@ the latency check: [`infra/README.md`](infra/README.md) and
 ## Forwarding a message (`POST /inbox`)
 
 ```bash
-uv run alexa-mcp-inbox-token        # prints a personal token once (Telegram /token does this in phase 6b)
+uv run alexa-mcp-inbox-token        # prints a personal token once (a planned Telegram /token command would do this)
 curl -X POST http://127.0.0.1:8000/inbox -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"text": "Per my last email...", "sender": "Priya"}'
 # then: decode() with no message, or triage_inbox()
