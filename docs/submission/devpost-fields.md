@@ -8,11 +8,11 @@ javascript, html5, web-speech-api, pytest, moto, uv, playwright, ffmpeg
 
 ## "Try it out" links
 
-- Code: https://github.com/navinrc/NeuroCare (private; shared with the Amazon reviewers and testing@devpost.com)
+- Code: https://github.com/navinrc/NeuroCare (public, MIT)
 - Demo video: https://youtu.be/tjRjl7ehqKg
 
-The live simulator URL needs the demo account to link, so it's left off the public page. Share it
-with judges privately if asked.
+No public live demo: the simulator needs an account to link, and the repo is public, so no
+credentials are shared. Run it locally from the README.
 
 ## Video demo link
 
