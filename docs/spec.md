@@ -26,6 +26,7 @@ self-reinforcing loops.
 | Guardrail | Crisis path, rumination detection, hyperfocus check-ins, user overrides |
 | Daily plan | Brain-dump capture, top-3 priorities picked by the server, gentle end-of-day rollover, pinned Today message in Telegram |
 | Telegram companion (channel) | Forward messages for a triage card, tap buttons, pinned Today view, opt-in nudges the bot sends first |
+| Alexa simulator (demo client) | Echo Show–style web page that plays Alexa+: real MCP client, real account linking, voice in/out, native reminders (§5.9). Needed because entrants get no Alexa+ developer tools |
 
 ### Out of scope (MVP)
 
@@ -103,7 +104,7 @@ sequenceDiagram
 | Bedrock model | Claude Haiku 4.5, configurable via `BEDROCK_MODEL_ID` (Nova can be swapped in) |
 | Infrastructure as code | AWS CDK (Python), in `infra/` |
 | Transport | Streamable HTTP only (hackathon requirement) |
-| Channels | Alexa+ (voice, MCP) is the primary channel. Telegram bot (§5.7) is an optional companion for reading, forwarding, and opt-in nudges; it calls the same pillar functions. No web UI |
+| Channels | Alexa+ (voice, MCP) is the primary channel. Telegram bot (§5.7) is an optional companion for reading, forwarding, and opt-in nudges; it calls the same pillar functions. No web UI for the server itself; the Alexa simulator (§5.9) is a separate client that stands in for Alexa+ in the demo |
 
 ## 4. Conventions for every tool
 
@@ -690,6 +691,80 @@ flowchart LR
     TGQ -- no --> WAIT([Wait for 'Alexa, what needs me?'])
 ```
 
+### 5.9 Alexa simulator (phase 6a)
+
+Hackathon entrants get no Alexa+ developer tools, and the organizer confirmed that a simulated
+experience is the only way to demo (FINDINGS #59). The simulator stands in for Alexa+ and nothing
+else: it is a **real MCP client** of the deployed server, does the **real account-linking flow**
+against Cognito, and runs its own model with the server's tools, the way Alexa+ does. The MCP
+server does not change for it and cannot tell it from Alexa.
+
+**What it is.** A second, separate app (`src/alexa_sim/`, its own Lambda + Function URL) that serves
+one web page styled as an Echo Show, plus a small JSON API behind it.
+
+| Alexa+ behaviour | Simulator |
+|---|---|
+| Wake word, speech in | Push-to-talk button (or space bar) → browser Web Speech API (`SpeechRecognition`); typed input always available |
+| Speech out | Browser `speechSynthesis` reads the reply; reply text shown on screen |
+| Its own LLM, deciding which tool to call | Bedrock Converse with tool use (`SIM_MODEL_ID`, default Claude Haiku 4.5); system prompt = the server's MCP `instructions` from `initialize`, plus a short Alexa persona |
+| Tools from the add-on | `tools/list` from the server at session start; never a hard-coded list |
+| Account linking (OAuth 2.1, PKCE S256, refresh) | "Link NeuroCare" button → Cognito hosted UI with the `alexa-plus` client → `/sim/callback` → tokens kept server-side; refresh on expiry; "Unlink" clears them |
+| Unlinked user | A tool call returns 401 → the simulator says "To use NeuroCare, link your account" and shows the link button |
+| Conversation context | Last 10 turns kept in the simulator session (Alexa+ does this; the MCP server never sees history) |
+| Native reminders (server returns `suggest_reminder_minutes`) | A simulator-local tool `set_reminder(minutes, text)` the model can call after the user agrees; at the time: chime + yellow ring + the text spoken |
+| Notification light | Yellow ring when a reminder is due or fired and unread |
+
+**Not simulated:** music, smart home, other skills, multiple devices. The Telegram channel (§5.7)
+stays separate.
+
+**Turn loop** (one user utterance):
+
+1. Append the utterance to the session's history.
+2. Converse with the model: system prompt, history, MCP tools + `set_reminder`.
+3. For each tool call: MCP tools → `tools/call` on the server with the user's bearer token
+   (Streamable HTTP via the `mcp` SDK client); `set_reminder` → stored in the session.
+4. Feed results back; repeat until the model answers in text (at most 5 tool rounds; then say
+   "Sorry, I couldn't finish that").
+5. Speak the reply. The model is told to say the tool's `speak` text plainly; when a result has
+   `crisis: true`, the simulator speaks only that result's `speak` (and lists the resources on
+   screen) without a model rewrite, matching server instruction "say only the provided message".
+
+**Dev panel** (toggle, off by default for the video): each tool call with arguments, result,
+and server round trip in ms; the model's turn time. Used for the latency proof and debugging.
+
+**Sessions and tokens.** Session id in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie. Tokens,
+history, and reminders live in the simulator's own DynamoDB table (`neurocare-sim`, PK
+`SESSION#<id>`, TTL 30 days), never in the server's table. Refresh tokens never reach the browser.
+The OAuth `state` and PKCE verifier are bound to the session and single use.
+
+**Config:** `SIM_MCP_URL`, `SIM_MODEL_ID`, `COGNITO_DOMAIN`, `SIM_CLIENT_ID`, `SIM_CLIENT_SECRET`
+(Secrets Manager on AWS), `SIM_TABLE`, `SIM_PUBLIC_URL` (for the callback). Local dev:
+`uv run alexa-sim` at `http://127.0.0.1:8100` against a local server, with `SIM_STATIC_TOKEN`
+in place of linking.
+
+**Honesty in the demo.** The page labels itself "Alexa+ simulator" in the corner. The video may
+narrate and shorten waits (organizer); every reply shown is produced live by the deployed stack.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant B as Browser (Echo Show page)
+    participant SIM as Simulator API (Lambda)
+    participant M as Bedrock (simulator model)
+    participant S as NeuroCare MCP server
+    U->>B: "Alexa, what was I doing?" (push-to-talk)
+    B->>SIM: POST /sim/turn {text}
+    SIM->>M: Converse(system = server instructions, tools)
+    M-->>SIM: tool_use what_was_i_doing
+    SIM->>S: tools/call (Bearer Cognito access token)
+    S-->>SIM: { ..., speak }
+    SIM->>M: tool_result
+    M-->>SIM: reply text
+    SIM-->>B: { reply, tool_calls, reminders }
+    B-->>U: speechSynthesis(reply)
+```
+
 ## 6. Safety
 
 ### Crisis path
@@ -940,11 +1015,18 @@ src/alexa_mcp_server/
   refine.py          async self-invoke + Bedrock refine jobs (decode, decompose, split_step, brain_dump)
   lambda_handler.py  Function URL → ASGI adapter (one lifespan per container); routes async refine
                      and scheduler events; resolves PUBLIC_BASE_URL from its own Function URL
+src/alexa_sim/       Alexa simulator (§5.9), a separate client of the server:
+  app.py             Starlette app: page, /sim/turn, /sim/link, /sim/callback, /sim/unlink, /sim/reminders
+  agent.py           turn loop: Bedrock Converse tool use ↔ MCP tools/call; set_reminder
+  oauth.py           Cognito auth code + PKCE S256, refresh
+  sessions.py        session store (DynamoDB neurocare-sim; in-memory for tests)
+  static/index.html  Echo Show page: push-to-talk, Web Speech API, ring, dev panel
 profile_seed.yaml
 infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail,
                      lambda:InvokeFunction on itself), Guardrail, Cognito user pool + app client + hosted domain,
                      EventBridge Scheduler rule, Secrets Manager secrets (Telegram bot token, webhook secret),
-                     optional SES receipt rule + S3 bucket for email forwarding
+                     optional SES receipt rule + S3 bucket for email forwarding; simulator Lambda + URL,
+                     neurocare-sim table, simulator callback URL on the Cognito client
 ```
 
 Pillar modules are plain functions taking `(store, llm, user_id, ...)` so they are testable
@@ -1008,6 +1090,7 @@ Each phase is demoable on its own.
 | 4 | Guardrail: crisis → rumination → hyperfocus | Crisis precheck short-circuits `remember`, `decode`, `log_topic`, and `decompose` (tested); `ApplyGuardrail` timeout → async re-run, and an async hit makes the next call return crisis first; 3rd similar `log_topic` inside window detects; override suppresses; crisis ignores override |
 | 5 | Task breakdown + daily plan | Steps validated (count, minutes, verb-first, step 1 ≤ 5 min); `next_step`/`done_step` walk the list; `split_step` replaces only the current step; `skip_step` moves it to the end; fallback on LLM failure; fast-first baselines for `decompose`, `split_step`, and `brain_dump` returned without waiting on the LLM, then replaced by the refine. `brain_dump` splits multi-item text (baseline stores one item) and is short-circuited by the crisis precheck; `plan_today` never exceeds `plan.max_priorities` and respects energy; `wrap_up` rolls unfinished items |
 | 6 | DynamoDB store + CDK + Lambda + account linking | Same test suite passes against moto-backed DynamoDB; `cdk deploy` succeeds; PRM served at `/.well-known/oauth-protected-resource`; 401 carries `WWW-Authenticate` with `resource_metadata`; expired/wrong-client JWTs rejected; Alexa+ account linking completes against Cognito (PKCE S256, refresh token issued); Alexa-path tools measured < 500 ms round trip on a warm Lambda |
+| 6a | Alexa simulator (§5.9) | Turn loop with `FakeLLM` scripted tool calls against the in-process MCP server: tools come from `tools/list`, system prompt from `instructions`, results fed back, ≤ 5 tool rounds; crisis result spoken verbatim without a model rewrite; 401 → link prompt; `set_reminder` fires chime + ring at the time (clock fixture); OAuth callback rejects a wrong/reused `state`, sends PKCE S256, refreshes an expired access token, unlink clears tokens; refresh token never sent to the browser; deployed simulator links the demo account through Cognito and runs the "One day" demo arc steps that don't need Telegram, live, by voice in Chrome |
 | 6b | Telegram companion | Link code flow (expiry, single use); webhook rejects a missing/wrong secret header; unlinked chat rejected; forwarded text → triage card with buttons; buttons call `remember` / `brain_dump` / feedback; pinned Today message edited on plan change; push cap and quiet hours honored (clock fixture); local long-polling dev mode works. Optional email forwarding: Gmail/Outlook/Apple Mail forward fixtures parse the original sender; non-allowlisted or SPF/DKIM-failing mail dropped; raw object deleted after parse; card sent to linked Telegram chat |
 | 7 | Stretch | `reality_check(claim)` |
 
@@ -1020,7 +1103,8 @@ flowchart LR
     P3 --> P5[5 · Task breakdown<br/>+ daily plan]
     P4 --> P6[6 · DynamoDB + CDK<br/>+ Lambda deploy<br/>+ account linking]
     P5 --> P6
-    P6 --> P6B[6b · Telegram companion]
+    P6 --> P6A[6a · Alexa simulator<br/>demo client]
+    P6A --> P6B[6b · Telegram companion]
     P6B --> P7[7 · Stretch<br/>reality_check]
 
     classDef mvp fill:#DCEFFB,stroke:#147EBA,color:#0B3D5C
@@ -1028,7 +1112,7 @@ flowchart LR
     classDef stretch fill:#ECEFF4,stroke:#7D8998,color:#1B1F24,stroke-dasharray:4 3
     class P1,P2,P3,P4,P5 mvp
     class P6 aws
-    class P6B mvp
+    class P6A,P6B mvp
     class P7 stretch
 ```
 
@@ -1058,6 +1142,9 @@ flowchart LR
 | False positives in rumination/hyperfocus | Configurable thresholds, `lower_sensitivity` override, facts-not-instructions wording |
 | Scope creep into a second agent or broad inbox access | Alexa+ is the only agent; connectors only forward user-chosen messages to `/inbox` |
 | Notification fatigue from bot-initiated messages | Off by default, opt-in per type, daily cap, quiet hours |
+| No real Alexa+ access for entrants (organizer, FINDINGS #59) | Alexa simulator (§5.9): real MCP client + real account linking, labelled as a simulator; server stays spec-compliant for Alexa+ |
+| Web Speech API recognition is Chrome-only and needs network | Typed input always works; record the demo in Chrome |
+| Simulator's model picks tools differently from Alexa+ | Uses the same server instructions and tool descriptions; friction log notes differences; the server is what's being judged |
 | Telegram not allowed by employer or not installed | Channel is optional; Alexa alone covers every feature except unprompted messages |
 | Spoofed webhook calls | Secret header check; unlinked chats rejected |
 | Spoofed forwarded email | Sender allowlist plus SES SPF/DKIM verdicts; no outbound mail, so a spoof can at most add an inbox item |
