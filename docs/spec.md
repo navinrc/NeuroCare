@@ -737,8 +737,10 @@ history, and reminders live in the simulator's own DynamoDB table (`neurocare-si
 `SESSION#<id>`, TTL 30 days), never in the server's table. Refresh tokens never reach the browser.
 The OAuth `state` and PKCE verifier are bound to the session and single use.
 
-**Config:** `SIM_MCP_URL`, `SIM_MODEL_ID`, `COGNITO_DOMAIN`, `SIM_CLIENT_ID`, `SIM_CLIENT_SECRET`
-(Secrets Manager on AWS), `SIM_TABLE`, `SIM_PUBLIC_URL` (for the callback). Local dev:
+**Config:** `SIM_MCP_URL`, `SIM_MODEL_ID`, `COGNITO_DOMAIN`, `SIM_CLIENT_ID`, `SIM_CLIENT_SECRET`,
+`SIM_TABLE`, `SIM_PUBLIC_URL` (for the callback). On AWS the client id/secret are read from the pool's
+`alexa-plus` client at init (`COGNITO_USER_POOL_ID`), and both URLs from the Lambda Function URLs
+(`SIM_MCP_FUNCTION`), because the client's callback URL depends on the simulator (FINDINGS #63). Local dev:
 `uv run alexa-sim` at `http://127.0.0.1:8100` against a local server, with `SIM_STATIC_TOKEN`
 in place of linking.
 
@@ -1018,6 +1020,7 @@ src/alexa_mcp_server/
 src/alexa_sim/       Alexa simulator (§5.9), a separate client of the server:
   app.py             Starlette app: page, /sim/turn, /sim/link, /sim/callback, /sim/unlink, /sim/reminders
   agent.py           turn loop: Bedrock Converse tool use ↔ MCP tools/call; set_reminder
+  lambda_handler.py  Function URL → app via alexa_mcp_server.asgi_lambda (shared, side-effect free)
   oauth.py           Cognito auth code + PKCE S256, refresh
   sessions.py        session store (DynamoDB neurocare-sim; in-memory for tests)
   static/index.html  Echo Show page: push-to-talk, Web Speech API, ring, dev panel

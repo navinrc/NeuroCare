@@ -10,6 +10,8 @@ Deploys NeuroCare to `us-east-1` (spec §9):
 | Cognito user pool `neurocare-users` | No self sign-up, hosted UI domain, resource server `neurocare` with scope `tools`, **retained** on destroy |
 | App client `alexa-plus` | Auth code grant, client secret, scopes `openid email neurocare/tools`, refresh tokens 30 days |
 | IAM | Table read/write, Bedrock `InvokeModel` (Haiku 4.5, Titan v2, Nova), `ApplyGuardrail`, self-invoke |
+| Lambda `neurocare-alexa-sim` + URL | Alexa simulator (spec §5.9), 60 s; reads the `alexa-plus` client and the server URL at init |
+| DynamoDB `neurocare-sim` | Simulator sessions (tokens, history, reminders), TTL 30 days, destroyed with the stack |
 
 Phase 6b adds the Telegram secrets, the EventBridge Scheduler rule, and optional SES inbound.
 

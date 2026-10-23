@@ -3,6 +3,24 @@
 Running status of the autonomous build through the spec phases (`docs/spec.md` §11).
 Details per phase: `docs/verify/phase-N.md`. Every bug and decision: `docs/verify/FINDINGS.md`.
 
+## 2026-10-23 (evening) — start here
+
+1. **Phase 6a voice check (you).** `docs/verify/phase-6a.md` steps 2–3 in Chrome at the
+   `SimulatorUrl` (link, then the "One day" arc by voice).
+2. Merge order: #13 (phase 6) → #14 (simulator spec) → phase 6a PR.
+3. FINDINGS #61: extend the deployer role's log access to the simulator's log group.
+
+### Phase 6a built — Alexa simulator
+
+- Organizer (2026-10-19): no Alexa+ developer tools for entrants; simulated demo only (#59).
+- `src/alexa_sim/`: Echo Show page, Bedrock tool-use loop over the server's MCP tools, real
+  Cognito linking (PKCE S256, refresh), push-to-talk, chime + yellow ring reminders, dev panel.
+- Deployed as `neurocare-alexa-sim` + `neurocare-sim` table. Live: linked the demo account and
+  ran six demo-arc turns against the deployed server (2.2–3.6 s per turn, mostly model).
+- Two deploy bugs found live and fixed: wrong resource URL on the server (#55), simulator
+  starting the server inside its own Lambda (#60).
+- Tests: 497 passed, 9 skipped; infra 5 passed. FINDINGS #60–#65.
+
 ## 2026-10-23 (later) — start here
 
 1. **Phase 6 deploy + verification (you).** `docs/verify/phase-6.md` steps 2–6: `cdk deploy`,

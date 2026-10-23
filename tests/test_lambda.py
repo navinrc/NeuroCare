@@ -9,9 +9,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from alexa_mcp_server import auth, lambda_handler, server
+from alexa_mcp_server import asgi_lambda, auth, lambda_handler, server
+from alexa_mcp_server.asgi_lambda import LambdaASGI
 from alexa_mcp_server.config import Settings
-from alexa_mcp_server.lambda_handler import LambdaASGI
 from alexa_mcp_server.refine import JOBS, LambdaRefiner
 
 POOL = "us-east-1_TEST"
@@ -206,7 +206,7 @@ def test_wrong_host_is_rejected(authed_app):
 
 def test_real_server_over_the_adapter(mcp_store):
     """The production app (29 tools) through ``build_app``, stateless with JSON responses."""
-    app = lambda_handler.LambdaASGI(
+    app = asgi_lambda.LambdaASGI(
         server.mcp.streamable_http_app(
             stateless_http=True,
             json_response=True,
@@ -252,7 +252,7 @@ def test_lambda_refiner_swallows_invoke_errors():
 
 
 def test_response_encoding():
-    text = lambda_handler._response(200, [(b"content-type", b"application/json"), (b"set-cookie", b"a=1")], b"{}")
+    text = asgi_lambda._response(200, [(b"content-type", b"application/json"), (b"set-cookie", b"a=1")], b"{}")
     assert text == {
         "statusCode": 200,
         "headers": {"content-type": "application/json"},
@@ -260,7 +260,7 @@ def test_response_encoding():
         "isBase64Encoded": False,
         "cookies": ["a=1"],
     }
-    binary = lambda_handler._response(200, [(b"content-type", b"image/png")], b"\x89PNG")
+    binary = asgi_lambda._response(200, [(b"content-type", b"image/png")], b"\x89PNG")
     assert binary["isBase64Encoded"] is True
 
 

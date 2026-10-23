@@ -25,6 +25,7 @@ from constructs import Construct
 
 REPO = Path(__file__).resolve().parents[2]
 FUNCTION_NAME = "neurocare-mcp"
+SIM_FUNCTION_NAME = "neurocare-alexa-sim"
 RESOURCE_SERVER = "neurocare"
 SCOPE = "tools"
 PLATFORM = "aarch64-manylinux_2_28"
@@ -88,7 +89,84 @@ class NeuroCareStack(Stack):
         )
         tools_scope = cognito.ResourceServerScope(scope_name=SCOPE, scope_description="Use the NeuroCare MCP tools")
         resource_server = pool.add_resource_server("ResourceServer", identifier=RESOURCE_SERVER, scopes=[tools_scope])
-        redirect_uris = [u for u in (ctx("alexa_redirect_uris") or []) if u] + [INSPECTOR_CALLBACK]
+        code = lambda_.Code.from_asset(
+            str(REPO),
+            exclude=ASSET_EXCLUDE,
+            bundling=BundlingOptions(
+                image=lambda_.Runtime.PYTHON_3_13.bundling_image,
+                local=UvBundling(),
+                command=["bash", "-c", "pip install --no-cache-dir -q . -t /asset-output"],
+            ),
+        )
+
+        # --- Alexa simulator (spec §5.9): its own function, URL, and session table ------------------
+        # Built before the client, whose callback URLs include the simulator's. The simulator reads the
+        # client and the MCP server's URL at init (by pool id and function name), so nothing cycles.
+        sim_table = dynamodb.TableV2(
+            self,
+            "SimTable",
+            table_name="neurocare-sim",
+            partition_key=dynamodb.Attribute(name="PK", type=dynamodb.AttributeType.STRING),
+            billing=dynamodb.Billing.on_demand(),
+            encryption=dynamodb.TableEncryptionV2.aws_managed_key(),
+            time_to_live_attribute="ttl",
+            removal_policy=RemovalPolicy.DESTROY,  # simulator sessions only
+        )
+        sim_fn = lambda_.Function(
+            self,
+            "Simulator",
+            function_name=SIM_FUNCTION_NAME,
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="alexa_sim.lambda_handler.handler",
+            code=code,
+            memory_size=1024,
+            timeout=Duration.seconds(60),
+            environment={
+                "SIM_MCP_FUNCTION": FUNCTION_NAME,
+                "SIM_MODEL_ID": ctx("sim_model_id") or ctx("bedrock_model_id"),
+                "SIM_TABLE": sim_table.table_name,
+                "COGNITO_USER_POOL_ID": pool.user_pool_id,
+                "COGNITO_DOMAIN": f"{domain.domain_name}.auth.{self.region}.amazoncognito.com",
+            },
+            log_group=logs.LogGroup(
+                self,
+                "SimLogs",
+                log_group_name=f"/aws/lambda/{SIM_FUNCTION_NAME}",
+                retention=logs.RetentionDays.TWO_WEEKS,
+            ),
+        )
+        sim_url = sim_fn.add_function_url(auth_type=lambda_.FunctionUrlAuthType.NONE)
+        sim_table.grant_read_write_data(sim_fn)
+        sim_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["cognito-idp:ListUserPoolClients", "cognito-idp:DescribeUserPoolClient"],
+                resources=[pool.user_pool_arn],
+            )
+        )
+        sim_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["lambda:GetFunctionUrlConfig"],
+                resources=[
+                    f"arn:aws:lambda:{self.region}:{self.account}:function:{name}"
+                    for name in (FUNCTION_NAME, SIM_FUNCTION_NAME)
+                ],
+            )
+        )
+        sim_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:InvokeModel"],
+                resources=[
+                    "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+                    f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/*",
+                ],
+            )
+        )
+
+        redirect_uris = [u for u in (ctx("alexa_redirect_uris") or []) if u] + [
+            INSPECTOR_CALLBACK,
+            f"{sim_url.url}sim/callback",
+        ]
         client = pool.add_client(
             "AlexaClient",
             user_pool_client_name="alexa-plus",
@@ -139,19 +217,7 @@ class NeuroCareStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_13,
             architecture=lambda_.Architecture.ARM_64,
             handler="alexa_mcp_server.lambda_handler.handler",
-            code=lambda_.Code.from_asset(
-                str(REPO),
-                exclude=ASSET_EXCLUDE,
-                bundling=BundlingOptions(
-                    image=lambda_.Runtime.PYTHON_3_13.bundling_image,
-                    local=UvBundling(),
-                    command=[
-                        "bash",
-                        "-c",
-                        "pip install --no-cache-dir -q . -t /asset-output",
-                    ],
-                ),
-            ),
+            code=code,
             memory_size=int(ctx("memory_mb") or 1024),
             timeout=Duration.seconds(30),
             environment=environment,
@@ -194,3 +260,4 @@ class NeuroCareStack(Stack):
         CfnOutput(self, "AuthorizeUrl", value=f"{hosted}/oauth2/authorize")
         CfnOutput(self, "TokenUrl", value=f"{hosted}/oauth2/token")
         CfnOutput(self, "Scopes", value=f"openid email {RESOURCE_SERVER}/{SCOPE}")
+        CfnOutput(self, "SimulatorUrl", value=sim_url.url)
