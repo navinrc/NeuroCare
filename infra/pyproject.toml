@@ -1,0 +1,19 @@
+[project]
+name = "neurocare-infra"
+version = "0.1.0"
+description = "AWS CDK app for the NeuroCare MCP server: DynamoDB table, Lambda + Function URL, Cognito account linking."
+requires-python = ">=3.13"
+dependencies = [
+    "aws-cdk-lib>=2.274.0",
+    "constructs>=10.8.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

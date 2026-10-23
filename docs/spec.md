@@ -920,14 +920,15 @@ flowchart LR
     class A,INS,TG ext
 ```
 
-Planned module layout (not yet created):
+Module layout (Telegram, scheduler, and email modules arrive in phase 6b):
 
 ```
 src/alexa_mcp_server/
   server.py          MCPServer instance, instructions, tool registration, main()
   config.py          env settings
-  auth.py            Cognito JWT (JWKS cached; iss, client_id, exp, scope) → user_id; static token
-                     only with ALLOW_STATIC_TOKEN; PRM route /.well-known/oauth-protected-resource
+  auth.py            Cognito JWT (JWKS cached; iss, token_use, client_id, exp, scope) → user_id; static
+                     token only with ALLOW_STATIC_TOKEN; PRM at /.well-known/oauth-protected-resource
+                     (the SDK also serves /.well-known/oauth-protected-resource/mcp)
   store/             base.py (interface), sqlite.py, dynamo.py
   llm/               bedrock.py, fake.py (tests)
   pillars/           memory.py, time.py, translator.py, tasks.py, guardrail.py, plan.py
@@ -937,7 +938,8 @@ src/alexa_mcp_server/
   channels/email.py  SES inbound: parse forwarded email → INBOX# (optional)
   safety/crisis.py   phrase list + ApplyGuardrail
   refine.py          async self-invoke + Bedrock refine jobs (decode, decompose, split_step, brain_dump)
-  lambda_handler.py  ASGI → Lambda adapter; routes async refine and scheduler events
+  lambda_handler.py  Function URL → ASGI adapter (one lifespan per container); routes async refine
+                     and scheduler events; resolves PUBLIC_BASE_URL from its own Function URL
 profile_seed.yaml
 infra/               CDK app: table, Lambda, Function URL, IAM (Bedrock InvokeModel, ApplyGuardrail,
                      lambda:InvokeFunction on itself), Guardrail, Cognito user pool + app client + hosted domain,
@@ -956,7 +958,7 @@ uv run --no-project --with diagrams python docs/diagrams/aws_architecture.py
 ```
 
 Environment variables: `STORE`, `TABLE_NAME`, `SQLITE_PATH`, `AUTH_TOKEN`, `ALLOW_STATIC_TOKEN`, `DEMO_USER_ID`,
-`COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `PUBLIC_BASE_URL`,
+`COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`, `COGNITO_SCOPE`, `PUBLIC_BASE_URL`,
 `BEDROCK_MODEL_ID`, `BEDROCK_EMBED_MODEL_ID`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`,
 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (both from SSM / Secrets Manager on AWS),
 `INBOUND_EMAIL_DOMAIN`, `INBOUND_EMAIL_BUCKET` (optional),
@@ -1050,7 +1052,7 @@ flowchart LR
 | Alexa+ may look for authorization-server metadata at `/.well-known/oauth-authorization-server`, while Cognito serves `openid-configuration` | Verify at phase 6; fallback: Lambda serves that path, proxying Cognito's metadata |
 | 500 ms round-trip limit | Fast first, refine later (§4); Bedrock never on the Alexa request path; embedding 200 ms and ApplyGuardrail 250 ms budgets |
 | Baseline answers are less insightful than refined ones | `speak` leans on sender context and phrase cues; the full refined result reaches Telegram within seconds and the next voice ask |
-| Exact v2 `MCPServer` option for stateless HTTP / JSON response mode | Verify against current SDK docs at start of phase 6 |
+| Exact v2 `MCPServer` option for stateless HTTP / JSON response mode | Resolved in phase 6: `streamable_http_app(stateless_http=True, json_response=True)`, served by `lambda_handler.LambdaASGI` (one lifespan per container) |
 | Lambda cold starts break the 500 ms budget | Keep dependencies small; provisioned concurrency = 1 during demo and judging windows |
 | Per-user corpus outgrows in-process similarity (> ~5,000 vectors) | First drop Titan v2 to 512 or 256 dims and store vectors under their own SK prefix; only then consider a managed vector store (S3 Vectors, OpenSearch Serverless) |
 | False positives in rumination/hyperfocus | Configurable thresholds, `lower_sensitivity` override, facts-not-instructions wording |

@@ -197,12 +197,14 @@ Alexa+ links accounts with OAuth 2.1 only ([spec §3](spec.md#3-locked-decisions
 these; the list is what to check in the console.
 
 1. **User pool** in `us-east-1` with a hosted UI domain (e.g. `neurocare-demo.auth.us-east-1.amazoncognito.com`).
-2. **App client:** authorization code grant only (no implicit), **PKCE required (S256)**,
-   refresh tokens enabled (e.g. 30-day validity), a confidential client with a secret, scopes `openid` plus a
-   custom scope such as `neurocare/tools`.
+2. **App client** `alexa-plus`: authorization code grant only (no implicit), PKCE S256 (Cognito
+   checks it when the client sends one; it has no "required" switch, FINDINGS #47), refresh tokens
+   30 days, a confidential client with a secret, scopes `openid email neurocare/tools`.
 3. **Callback URLs:** add every redirect URI the Alexa developer console shows for the add-on
-   (there are several; register all of them).
-4. **Demo user:** create one user for the demo account; its `sub` becomes the `user_id`.
+   (there are several; register all of them) to `infra/cdk.json` → `alexa_redirect_uris` and
+   redeploy. The MCP Inspector callback is always registered.
+4. **Demo user:** create one user for the demo account; its `sub` becomes the `user_id`
+   (commands in [`infra/README.md`](../infra/README.md)).
 5. **Alexa developer console → account linking:** authorization URI, token URI, client ID and
    secret, and scopes from the steps above.
 6. **Check:** `curl $FUNCTION_URL/.well-known/oauth-protected-resource` returns the resource URL

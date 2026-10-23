@@ -13,6 +13,7 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3", extra = ["crt"] },
     { name = "mcp", extra = ["cli"] },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
 ]
 
@@ -28,6 +29,7 @@ dev = [
 requires-dist = [
     { name = "boto3", extras = ["crt"], specifier = ">=1.43.109" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 

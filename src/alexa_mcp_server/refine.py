@@ -8,9 +8,11 @@ item's sort key. Runners:
 
 - ``InlineRefiner``: runs the job before returning (Telegram webhook, tests).
 - ``ThreadRefiner``: a background thread pool (local server).
-- Lambda self-invoke (``InvocationType=Event``) arrives with the AWS deploy in phase 6.
+- ``LambdaRefiner``: the function invokes itself asynchronously (``InvocationType=Event``); the
+  event reaches ``lambda_handler.handler``, which calls ``run_job``.
 """
 
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -69,6 +71,27 @@ class InlineRefiner:
 
     def submit(self, name: str, user_id: str, ref: str) -> None:
         run_job(self.deps, name, user_id, ref)
+
+
+@dataclass
+class LambdaRefiner:
+    function_name: str
+    client: Any = None
+    """A boto3 Lambda client; made on first use when not given."""
+
+    def connect(self) -> None:
+        if self.client is None:
+            import boto3
+
+            self.client = boto3.client("lambda")
+
+    def submit(self, name: str, user_id: str, ref: str) -> None:
+        self.connect()
+        payload = json.dumps({"refine": {"name": name, "user_id": user_id, "ref": ref}}).encode()
+        try:
+            self.client.invoke(FunctionName=self.function_name, InvocationType="Event", Payload=payload)
+        except Exception:  # the baseline stands; the item stays refine: pending
+            log.exception("refine self-invoke %s failed", name)
 
 
 @dataclass
