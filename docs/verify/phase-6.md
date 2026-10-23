@@ -101,21 +101,12 @@ FINDINGS #30 (Bedrock budgets measured from India): from the Inspector, call `lo
 worry and note the round trip. It runs `ApplyGuardrail` (250 ms budget) and a Titan embed (200 ms);
 inside us-east-1 both should fit, so the total stays well under 500 ms.
 
-## 6. Alexa+ account linking (you)
+## 6. Alexa+ account linking — not available in the hackathon
 
-1. Alexa developer console → your add-on → **Account linking**: Authorization URI = `AuthorizeUrl`,
-   Access token URI = `TokenUrl`, client ID / secret from step 2, scopes `openid email neurocare/tools`,
-   authentication scheme HTTP Basic.
-2. Copy every redirect URI the console shows into `infra/cdk.json` → `alexa_redirect_uris`, then
-   `npx aws-cdk@2.1146.1 deploy` again.
-3. In the Alexa app, enable the add-on and link the demo account.
-4. Say "Alexa, what was I doing?" → the seeded context.
-5. Spec §12 risks to check while you are there: does Alexa look for
-   `/.well-known/oauth-authorization-server` (Cognito serves only `openid-configuration`; CloudWatch
-   would show a 404 on the Function URL)? Does typed chat on alexa.com call `decode`?
-
-**Expect:** linking completes (the Cognito sign-in page appears, then "successfully linked"); the
-voice answer comes from the seeded data.
+The organizer confirmed (2026-10-19) that entrants get no `alexa-ai` tools and must demo with a
+simulated experience (FINDINGS #59). The account-linking item is covered by the live OAuth run in
+the Proof below: Cognito hosted sign-in, auth code + PKCE S256 (wrong verifier rejected), refresh
+token issued, and the token accepted by the deployed server as the seeded user.
 
 ## Decisions to review
 
@@ -149,7 +140,7 @@ voice answer comes from the seeded data.
 - [ ] 3 endpoint checks (a–c)
 - [ ] 4 OAuth through the Inspector (d–h)
 - [ ] 5 latency < 500 ms warm
-- [ ] 6 Alexa+ account linking
+- [ ] 6 account linking via the OAuth proof (real Alexa not available, FINDINGS #59)
 
 ---
 
