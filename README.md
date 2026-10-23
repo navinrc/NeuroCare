@@ -21,6 +21,7 @@ per the track requirements.
 
 ## Quickstart
 ```bash
+git clone https://github.com/navinrc/NeuroCare.git && cd NeuroCare
 uv sync
 cp .env.example .env          # optional: HOST / PORT
 uv run alexa-mcp-seed --reset # load synthetic demo data (profile_seed.yaml) into .data/
