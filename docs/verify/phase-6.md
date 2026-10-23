@@ -87,13 +87,15 @@ as the demo user.
 
 ## 5. Latency (warm Lambda)
 
-Copy the access token from the Inspector (Authentication panel), then:
+Get an access token from the Inspector (Authentication panel) or without a browser
+(`scripts/oauth_token.py`, env vars in its docstring), then:
 
 ```bash
 TOKEN=<access token> uv run python scripts/latency.py <McpUrl> --rounds 5
 ```
 
-**Expect:** every row ✅ (max ≤ 500 ms). Paste the table under "Proof" below.
+**Expect:** every row ✅ (max ≤ 500 ms). From far from us-east-1 the round trip is mostly network;
+then read the server time from the Lambda `REPORT` lines in CloudWatch (FINDINGS #57).
 
 FINDINGS #30 (Bedrock budgets measured from India): from the Inspector, call `log_topic` with a new
 worry and note the round trip. It runs `ApplyGuardrail` (250 ms budget) and a Titan embed (200 ms);
@@ -151,6 +153,31 @@ voice answer comes from the seeded data.
 
 ---
 
-## Proof
+## Proof (live run, 2026-10-23, `neurocare-deployer` profile)
 
-_Paste the step 5 latency table here after the deploy._
+Stack `NeuroCare` deployed (90 s; redeployed once for FINDINGS #55). Demo user created, seeded with
+its `sub` (2 people, 5 memories, 1 block).
+
+**Step 3 — endpoints**
+- `GET /.well-known/oauth-protected-resource` → 200, `resource` = `https://kjkzytusgckzqo4boxgyjeq7we0khkkx.lambda-url.us-east-1.on.aws/mcp`, `authorization_servers` = the pool issuer, `scopes_supported: ["neurocare/tools"]`. Same from `/…/mcp`.
+- `POST /mcp` without a token → `401`, body `invalid_token`, but the challenge arrives as
+  `x-amzn-Remapped-www-authenticate: Bearer error="invalid_token", …, resource_metadata="…/.well-known/oauth-protected-resource/mcp"` (FINDINGS #56).
+
+**Step 4 — OAuth (`scripts/oauth_token.py`, no browser) and tools**
+```
+sign-in → 302
+token with a wrong PKCE verifier → 400 invalid_request
+token → 200; refresh_token issued: True; scope: neurocare/tools openid email
+refresh → 200; new access token: True
+```
+```
+tools/list 200 29 tools
+what_was_i_doing: You were working on the budget email. You started about 40 minutes ago. Three things are still open: …
+decompose: baseline pending | First step: Spend 5 minutes writing down what done looks like for do your taxes. …
+next_step after 8s: refine done remaining 10 | Next: Put last year's tax return on the desk. About 2 minutes.
+tampered token -> 401
+```
+
+**Step 5 — latency.** Client round trip from India 700–816 ms for every tool, `ping` included
+(network). Server time from Lambda `REPORT` lines, warm, 54 calls: **p50 26 ms, p95 48 ms, max 67 ms**.
+`log_topic` (guard + embed): 381 / 332 ms. Cold init 2.9–3.6 s (FINDINGS #57).

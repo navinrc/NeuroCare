@@ -3,7 +3,7 @@
   "watch": { "include": ["neurocare_infra/**", "../src/**"] },
   "context": {
     "table_name": "cognitive-substrate",
-    "cognito_domain_prefix": "neurocare-demo",
+    "cognito_domain_prefix": "neurocare-demo-nrc",
     "alexa_redirect_uris": [],
     "llm_provider": "bedrock",
     "bedrock_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",

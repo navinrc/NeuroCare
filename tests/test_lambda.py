@@ -262,3 +262,13 @@ def test_response_encoding():
     }
     binary = lambda_handler._response(200, [(b"content-type", b"image/png")], b"\x89PNG")
     assert binary["isBase64Encoded"] is True
+
+
+def test_handler_import_does_not_load_server_settings():
+    """Lambda imports the handler module before ``PUBLIC_BASE_URL`` is resolved (FINDINGS #55)."""
+    import subprocess
+    import sys
+
+    code = "import sys, alexa_mcp_server.lambda_handler; print('alexa_mcp_server.server' in sys.modules)"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert out.strip() == "False"
