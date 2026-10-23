@@ -118,12 +118,6 @@ profile_seed.yaml    # synthetic demo data
 tests/               # pytest; in-process MCP client + pillar tests
 ```
 
-## Resources
-- Hackathon resources: https://amazonappdev2026.devpost.com/resources
-- Agent Skills: https://apps.extensions.modelcontextprotocol.io/api/#build-with-agent-skills
-- MCP Python SDK: https://github.com/modelcontextprotocol/python-sdk
-- Amazon Devices Builder Tools (MCP): https://developer.amazon.com/docs/vega/0.24/mcp-server
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
